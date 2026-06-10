@@ -1,9 +1,10 @@
 [project]
 name = "remove-ai-watermarks"
 description = "Remove visible and invisible AI watermarks (Gemini / Nano Banana, ChatGPT, Stable Diffusion) and erase regions, inside ComfyUI."
-version = "0.1.0"
+version = "0.1.1"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
+classifiers = ["Operating System :: OS Independent"]
 dependencies = ["remove-ai-watermarks>=0.10.1"]
 
 [project.urls]
@@ -12,4 +13,4 @@ Repository = "https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks"
 [tool.comfy]
 PublisherId = "wiltodelta"
 DisplayName = "Remove AI Watermarks"
-Icon = ""
+Icon = "https://raiw.cc/web-app-manifest-192x192.png"
