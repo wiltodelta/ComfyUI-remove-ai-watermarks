@@ -41,8 +41,8 @@ jobs:
               | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
           fi
           curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null
-          registry_version=$(curl -fsSL https://api.comfy.org/nodes/remove-ai-watermarks \
-            | python -c "import json,sys; print(json.load(sys.stdin)['latest_version']['version'])")
+          registry_version=$(curl -fsSL https://api.comfy.org/nodes/remove-ai-watermarks/versions \
+            | python -c "import json,sys; print(max(json.load(sys.stdin), key=lambda row: tuple(map(int, row['version'].split('.'))))['version'])")
           echo "library=$library_version" >> "$GITHUB_OUTPUT"
           echo "registry=$registry_version" >> "$GITHUB_OUTPUT"
       - name: Synchronize package metadata
