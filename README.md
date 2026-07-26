@@ -59,11 +59,12 @@ Real-ESRGAN upscaler in the invisible node.
 
 ## Release synchronization
 
-The registry package has its own version. A scheduled GitHub Actions workflow
-checks the latest `remove-ai-watermarks` release, updates the dependency floor,
-runs compatibility tests, bumps the node patch version, and publishes only
-after those tests pass. A failed compatibility test blocks publication instead
-of exposing an incompatible node update.
+The registry package has its own version. Each `remove-ai-watermarks` release
+dispatches the synchronization workflow with its exact version. The workflow
+updates the dependency floor, runs compatibility tests, bumps the node patch
+version, and publishes only after those tests pass. A daily scheduled run is
+the recovery path for an interrupted release dispatch. A failed compatibility
+test blocks publication instead of exposing an incompatible node update.
 
 ## License
 
