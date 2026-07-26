@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
+from pathlib import Path
 from typing import Any, get_args
 
 import numpy as np
 
 import nodes
+
+
+def test_root_init_loads_without_package_context() -> None:
+    root_init = Path(__file__).parents[1] / "__init__.py"
+    spec = importlib.util.spec_from_file_location("_comfy_root", root_init)
+
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = ""
+    spec.loader.exec_module(module)
+    assert module.NODE_CLASS_MAPPINGS == nodes.NODE_CLASS_MAPPINGS
 
 
 def _stub_tensor_boundary(monkeypatch: Any) -> None:
