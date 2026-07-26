@@ -9,9 +9,9 @@ ComfyUI graph.
 
 | Node | What it does |
 | --- | --- |
-| **Remove Visible Watermark (RAIW)** | Removes a known visible mark: Gemini / Nano Banana sparkle, Doubao "豆包AI生成", Jimeng "★ 即梦AI", Samsung Galaxy AI. `mark = auto` picks the strongest detected one. cv2-only, no GPU. |
+| **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and detection sensitivity. No GPU is required for detection or the default cv2 fill. |
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
-| **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. `cv2` backend (fast, no deps) or `lama` backend (big-LaMa via onnxruntime, better quality). |
+| **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
 | **Remove Invisible Watermark / SynthID (RAIW)** | SDXL diffusion regeneration that defeats the SynthID pixel watermark while preserving text/face structure (canny ControlNet). Requires the GPU/ML extra. |
 
 All pixel nodes operate in-memory on the ComfyUI image batch. The invisible node
@@ -39,21 +39,31 @@ diffusers; multi-GB):
 pip install "remove-ai-watermarks[gpu]"
 ```
 
-Optional backends: `pip install "remove-ai-watermarks[lama]"` for the LaMa erase
-backend, `pip install "remove-ai-watermarks[esrgan]"` for the Real-ESRGAN
-upscaler in the invisible node.
+Optional backends: `pip install "remove-ai-watermarks[migan]"` for the
+memory-conscious MI-GAN fill, `pip install "remove-ai-watermarks[lama]"` for the
+heavier LaMa fill, and `pip install "remove-ai-watermarks[esrgan]"` for the
+Real-ESRGAN upscaler in the invisible node.
 
 ## Notes
 
 - ComfyUI image tensors carry no file metadata, so the invisible node's
   vendor-adaptive strength default falls back to the unknown-vendor value
-  (0.30). Set the `strength` input above 0 to override it.
-- There is no local SynthID detector; verify removal with the Gemini app's
-  "Verify with SynthID" oracle. Higher `strength` removes more but drifts
-  further from the original.
+  defined by the installed library. Set the `strength` input above 0 to override
+  it.
+- Proprietary invisible-watermark verification is vendor-specific. Use the
+  matching provider oracle. Higher `strength` removes more but drifts further
+  from the original.
 - `remove-ai-watermarks` depends on `opencv-python-headless`. If your ComfyUI
   install already ships `opencv-python`, both provide `cv2` and coexist; if you
   hit a cv2 conflict, keep a single OpenCV distribution in the environment.
+
+## Release synchronization
+
+The registry package has its own version. A scheduled GitHub Actions workflow
+checks the latest `remove-ai-watermarks` release, updates the dependency floor,
+runs compatibility tests, bumps the node patch version, and publishes only
+after those tests pass. A failed compatibility test blocks publication instead
+of exposing an incompatible node update.
 
 ## License
 

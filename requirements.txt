@@ -1,1 +1,1 @@
-remove-ai-watermarks>=0.10.1
+remove-ai-watermarks>=0.20.0

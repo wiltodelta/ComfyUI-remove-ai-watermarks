@@ -7,6 +7,13 @@ name: Publish to Comfy registry
 # registry API key from registry.comfy.org).
 
 on:
+  workflow_call:
+    inputs:
+      run_tests:
+        description: "Run compatibility tests before publishing"
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
   push:
     branches: [main]
@@ -20,6 +27,13 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Test against the declared library version
+        if: github.event_name != 'workflow_call' || inputs.run_tests
+        run: |
+          bash scripts/test.sh
       - name: Publish custom node
         uses: Comfy-Org/publish-node-action@main
         with:

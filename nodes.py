@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, get_args
 
 import numpy as np
-import torch
+
+if TYPE_CHECKING:
+    import torch
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +26,7 @@ CATEGORY = "remove-ai-watermarks"
 # --- tensor <-> numpy boundary helpers -------------------------------------
 
 
-def _tensor_to_bgr_list(image: "torch.Tensor") -> list[np.ndarray[Any, Any]]:
+def _tensor_to_bgr_list(image: torch.Tensor) -> list[np.ndarray[Any, Any]]:
     """ComfyUI IMAGE (B, H, W, C) float RGB [0, 1] -> list of BGR uint8 frames."""
     arr = image.detach().cpu().numpy()
     frames: list[np.ndarray[Any, Any]] = []
@@ -37,8 +39,10 @@ def _tensor_to_bgr_list(image: "torch.Tensor") -> list[np.ndarray[Any, Any]]:
     return frames
 
 
-def _bgr_list_to_tensor(frames: list[np.ndarray[Any, Any]]) -> "torch.Tensor":
+def _bgr_list_to_tensor(frames: list[np.ndarray[Any, Any]]) -> torch.Tensor:
     """List of BGR uint8 frames -> ComfyUI IMAGE (B, H, W, C) float RGB [0, 1]."""
+    import torch
+
     tensors = []
     for bgr in frames:
         rgb = bgr[..., :3][..., ::-1].copy()  # BGR -> RGB
@@ -46,7 +50,7 @@ def _bgr_list_to_tensor(frames: list[np.ndarray[Any, Any]]) -> "torch.Tensor":
     return torch.stack(tensors, dim=0)
 
 
-def _mask_to_uint8_list(mask: "torch.Tensor", count: int) -> list[np.ndarray[Any, Any]]:
+def _mask_to_uint8_list(mask: torch.Tensor, count: int) -> list[np.ndarray[Any, Any]]:
     """ComfyUI MASK (B, H, W) or (H, W) float [0, 1] -> list of uint8 masks (255 = erase).
 
     A single mask is broadcast across the whole image batch.
@@ -65,20 +69,27 @@ def _mask_to_uint8_list(mask: "torch.Tensor", count: int) -> list[np.ndarray[Any
 
 
 class RAIWRemoveVisibleWatermark:
-    """Remove a known visible AI watermark (Gemini sparkle, Doubao, Jimeng, Samsung)."""
+    """Remove a registered visible AI-provenance mark."""
 
     @classmethod
     def INPUT_TYPES(cls) -> dict[str, Any]:
         from remove_ai_watermarks import watermark_registry
 
         marks = ["auto", *watermark_registry.mark_keys()]
+        backends = list(get_args(watermark_registry.Backend))
+        sensitivities = list(get_args(watermark_registry.Sensitivity))
         return {
             "required": {
                 "image": ("IMAGE",),
                 "mark": (marks, {"default": "auto"}),
             },
             "optional": {
+                # Retained so existing workflows keep their widget layout. Since
+                # library 0.16 every visible mark uses localize -> fill, so this
+                # legacy switch no longer changes the removal path.
                 "inpaint": ("BOOLEAN", {"default": True}),
+                "backend": (backends, {"default": "auto"}),
+                "sensitivity": (sensitivities, {"default": "auto"}),
             },
         }
 
@@ -87,25 +98,31 @@ class RAIWRemoveVisibleWatermark:
     FUNCTION = "remove"
     CATEGORY = CATEGORY
 
-    def remove(self, image: "torch.Tensor", mark: str, inpaint: bool = True) -> tuple[Any, str]:
+    def remove(
+        self,
+        image: torch.Tensor,
+        mark: str,
+        inpaint: bool = True,
+        backend: str = "auto",
+        sensitivity: str = "auto",
+    ) -> tuple[Any, str]:
         from remove_ai_watermarks import watermark_registry
 
+        del inpaint
         frames = _tensor_to_bgr_list(image)
         out: list[np.ndarray[Any, Any]] = []
         infos: list[str] = []
         for bgr in frames:
             if mark == "auto":
-                best = watermark_registry.best_auto_mark(bgr)
-                if best is None:
-                    out.append(bgr)
-                    infos.append("no visible mark detected")
-                    continue
-                known = watermark_registry.get_mark(best.key)
-                result, _ = known.remove(bgr, inpaint=inpaint)
-                infos.append(f"removed {best.key} (conf {best.confidence:.2f})")
+                result, labels = watermark_registry.remove_auto_marks(
+                    bgr,
+                    backend=backend,
+                    sensitivity=sensitivity,
+                )
+                infos.append(", ".join(labels) if labels else "no visible mark detected")
             else:
                 known = watermark_registry.get_mark(mark)
-                result, _ = known.remove(bgr, inpaint=inpaint, force=True)
+                result, _ = known.remove(bgr, backend=backend, force=True)
                 infos.append(f"removed {mark} (forced)")
             out.append(result)
         return (_bgr_list_to_tensor(out), " | ".join(infos))
@@ -123,7 +140,7 @@ class RAIWDetectVisibleWatermark:
     FUNCTION = "detect"
     CATEGORY = CATEGORY
 
-    def detect(self, image: "torch.Tensor") -> tuple[str, bool, float, str]:
+    def detect(self, image: torch.Tensor) -> tuple[str, bool, float, str]:
         from remove_ai_watermarks import watermark_registry
 
         bgr = _tensor_to_bgr_list(image)[0]  # report on the first frame
@@ -140,17 +157,20 @@ class RAIWDetectVisibleWatermark:
 
 
 class RAIWEraseRegion:
-    """Erase an arbitrary region (given by a MASK) via inpainting (cv2 or LaMa)."""
+    """Erase an arbitrary region through a cv2, MI-GAN, or LaMa fill."""
 
     @classmethod
     def INPUT_TYPES(cls) -> dict[str, Any]:
+        from remove_ai_watermarks import region_eraser
+
+        backends = list(get_args(region_eraser.Backend))
         return {
             "required": {
                 "image": ("IMAGE",),
                 "mask": ("MASK",),
             },
             "optional": {
-                "backend": (["cv2", "lama"], {"default": "cv2"}),
+                "backend": (backends, {"default": "cv2"}),
                 "dilate": ("INT", {"default": 3, "min": 0, "max": 64}),
                 "cv2_method": (["telea", "ns"], {"default": "telea"}),
                 "cv2_radius": ("INT", {"default": 6, "min": 1, "max": 64}),
@@ -164,8 +184,8 @@ class RAIWEraseRegion:
 
     def erase(
         self,
-        image: "torch.Tensor",
-        mask: "torch.Tensor",
+        image: torch.Tensor,
+        mask: torch.Tensor,
         backend: str = "cv2",
         dilate: int = 3,
         cv2_method: str = "telea",
@@ -230,7 +250,7 @@ class RAIWRemoveInvisibleWatermark:
 
     def remove(
         self,
-        image: "torch.Tensor",
+        image: torch.Tensor,
         pipeline: str = "controlnet",
         strength: float = 0.0,
         steps: int = 30,
@@ -246,7 +266,10 @@ class RAIWRemoveInvisibleWatermark:
         upscaler: str = "lanczos",
     ) -> tuple[Any]:
         try:
-            from remove_ai_watermarks.invisible_engine import InvisibleEngine, is_available
+            from remove_ai_watermarks.invisible_engine import (
+                InvisibleEngine,
+                is_available,
+            )
         except Exception as exc:  # diffusers/torch not installed
             raise RuntimeError(
                 "The invisible-watermark node needs the GPU/ML extra. Install it with: "
