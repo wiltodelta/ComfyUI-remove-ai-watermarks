@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "17 6 * * *"
   workflow_dispatch:
+    inputs:
+      library_version:
+        description: "Published remove-ai-watermarks version to synchronize. Blank uses the latest PyPI release."
+        required: false
+        type: string
 
 concurrency:
   group: sync-remove-ai-watermarks
@@ -25,10 +30,17 @@ jobs:
           python-version: "3.12"
       - name: Resolve published versions
         id: versions
+        env:
+          REQUESTED_LIBRARY_VERSION: ${{ inputs.library_version }}
         run: |
           set -euo pipefail
-          library_version=$(curl -fsSL https://pypi.org/pypi/remove-ai-watermarks/json \
-            | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          if [ -n "$REQUESTED_LIBRARY_VERSION" ]; then
+            library_version=$REQUESTED_LIBRARY_VERSION
+          else
+            library_version=$(curl -fsSL https://pypi.org/pypi/remove-ai-watermarks/json \
+              | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
+          fi
+          curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null
           registry_version=$(curl -fsSL https://api.comfy.org/nodes/remove-ai-watermarks \
             | python -c "import json,sys; print(json.load(sys.stdin)['latest_version']['version'])")
           echo "library=$library_version" >> "$GITHUB_OUTPUT"
