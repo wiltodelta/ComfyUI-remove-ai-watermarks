@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: true
+      checkout_ref:
+        description: "Git ref containing the package version to publish"
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
   push:
     branches: [main]
@@ -27,6 +32,8 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

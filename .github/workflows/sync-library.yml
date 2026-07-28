@@ -92,12 +92,14 @@ jobs:
           git commit -m "Sync remove-ai-watermarks $LIBRARY_VERSION"
           git push
 
-  # GITHUB_TOKEN pushes do not start push-triggered workflows, so the scheduled
-  # sync calls the shared publisher explicitly after committing its metadata.
+  # GITHUB_TOKEN pushes do not start push-triggered workflows, so the sync calls
+  # the shared publisher explicitly. checkout_ref must be main because a reusable
+  # workflow otherwise checks out the caller's pre-sync SHA.
   publish:
     needs: sync
     if: needs.sync.outputs.publish == 'true'
     uses: ./.github/workflows/publish.yml
     with:
       run_tests: false
+      checkout_ref: main
     secrets: inherit
