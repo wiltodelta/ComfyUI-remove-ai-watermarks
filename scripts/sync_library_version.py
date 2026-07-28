@@ -10,7 +10,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _NODE_VERSION = re.compile(r'^version = "(\d+)\.(\d+)\.(\d+)"$', re.MULTILINE)
-_LIBRARY_DEPENDENCY = re.compile(r"remove-ai-watermarks>=([0-9]+\.[0-9]+\.[0-9]+)")
+_LIBRARY_DEPENDENCY = re.compile(
+    r"(remove-ai-watermarks(?:\[[a-z0-9-]+\])?>=)([0-9]+\.[0-9]+\.[0-9]+)"
+)
 
 
 def sync_text(pyproject: str, requirements: str, *, library_version: str) -> tuple[str, str, bool]:
@@ -22,7 +24,7 @@ def sync_text(pyproject: str, requirements: str, *, library_version: str) -> tup
     requirement_matches = _LIBRARY_DEPENDENCY.findall(requirements)
     if len(dependency_matches) != 1 or len(requirement_matches) != 1:
         raise ValueError("expected one library dependency in each package file")
-    if dependency_matches[0] == library_version and requirement_matches[0] == library_version:
+    if dependency_matches[0][1] == library_version and requirement_matches[0][1] == library_version:
         return pyproject, requirements, False
 
     version_match = _NODE_VERSION.search(pyproject)
@@ -36,11 +38,11 @@ def sync_text(pyproject: str, requirements: str, *, library_version: str) -> tup
         pyproject,
     )
     updated_project, project_dep_count = _LIBRARY_DEPENDENCY.subn(
-        f"remove-ai-watermarks>={library_version}",
+        rf"\g<1>{library_version}",
         updated_project,
     )
     updated_requirements, requirements_count = _LIBRARY_DEPENDENCY.subn(
-        f"remove-ai-watermarks>={library_version}",
+        rf"\g<1>{library_version}",
         requirements,
     )
     if (version_count, project_dep_count, requirements_count) != (1, 1, 1):

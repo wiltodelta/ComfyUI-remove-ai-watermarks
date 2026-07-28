@@ -12,7 +12,7 @@ ComfyUI graph.
 | **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and detection sensitivity. No GPU is required for detection or the default cv2 fill. |
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
 | **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
-| **Remove Invisible Watermark / SynthID (RAIW)** | SDXL diffusion regeneration that defeats the SynthID pixel watermark while preserving text/face structure (canny ControlNet). Requires the GPU/ML extra. |
+| **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration that defeats the SynthID pixel watermark. Choose ControlNet, SDXL, or the CUDA-only Qwen-Image plus Z-Image profile for the highest face fidelity. |
 
 All pixel nodes operate in-memory on the ComfyUI image batch. The invisible node
 writes each frame to a temp file, runs the diffusion engine, and reads it back.
@@ -31,13 +31,9 @@ git clone https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks
 pip install -r ComfyUI-remove-ai-watermarks/requirements.txt
 ```
 
-The base install (`remove-ai-watermarks`) covers the three pixel nodes. The
-**invisible / SynthID** node additionally needs the diffusion stack (torch,
-diffusers; multi-GB):
-
-```sh
-pip install "remove-ai-watermarks[gpu]"
-```
+The package installs `remove-ai-watermarks[qwen-zimage]`, including the normal
+GPU diffusion stack and the separate DiffSynth runtime. Model weights are not
+bundled and download on first use.
 
 Optional backends: `pip install "remove-ai-watermarks[migan]"` for the
 memory-conscious MI-GAN fill, `pip install "remove-ai-watermarks[lama]"` for the
@@ -50,6 +46,11 @@ Real-ESRGAN upscaler in the invisible node.
   vendor-adaptive strength default falls back to the unknown-vendor value
   defined by the installed library. Set the `strength` input above 0 to override
   it.
+- `qwen-zimage` is CUDA-only. It uses its fixed four-step Lightning schedule,
+  CFG 1.0, native-resolution policy, and no adaptive polish regardless of stale
+  SDXL widget values stored in an existing workflow. Seed 0 is the certified
+  default. Use `tile` for large inputs and `cpu_offload` to keep the face stack
+  off the GPU between calls.
 - Proprietary invisible-watermark verification is vendor-specific. Use the
   matching provider oracle. Higher `strength` removes more but drifts further
   from the original.

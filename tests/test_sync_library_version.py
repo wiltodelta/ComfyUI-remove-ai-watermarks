@@ -9,9 +9,9 @@ from scripts.sync_library_version import sync_text
 _PROJECT = """\
 [project]
 version = "0.1.2"
-dependencies = ["remove-ai-watermarks>=0.19.0"]
+dependencies = ["remove-ai-watermarks[qwen-zimage]>=0.19.0"]
 """
-_REQUIREMENTS = "remove-ai-watermarks>=0.19.0\n"
+_REQUIREMENTS = "remove-ai-watermarks[qwen-zimage]>=0.19.0\n"
 
 
 def test_sync_text_updates_both_floors_and_bumps_patch() -> None:
@@ -23,8 +23,8 @@ def test_sync_text_updates_both_floors_and_bumps_patch() -> None:
 
     assert changed
     assert 'version = "0.1.3"' in project
-    assert "remove-ai-watermarks>=0.20.0" in project
-    assert requirements == "remove-ai-watermarks>=0.20.0\n"
+    assert "remove-ai-watermarks[qwen-zimage]>=0.20.0" in project
+    assert requirements == "remove-ai-watermarks[qwen-zimage]>=0.20.0\n"
 
 
 def test_sync_text_is_idempotent() -> None:

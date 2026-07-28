@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ -n "${LIBRARY_VERSION:-}" ]]; then
-  python -m pip install "remove-ai-watermarks==$LIBRARY_VERSION" pytest
+  python -m pip install "remove-ai-watermarks[qwen-zimage]==$LIBRARY_VERSION" pytest
 else
   python -m pip install --requirement requirements.txt pytest
 fi

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import re
 from pathlib import Path
 from typing import Any, get_args
 
@@ -70,6 +71,104 @@ def test_input_choices_follow_library_types() -> None:
     assert erase["backend"][0] == list(get_args(region_eraser.Backend))
 
 
+def test_invisible_node_exposes_qwen_zimage_profile() -> None:
+    required = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()["required"]
+
+    assert required["pipeline"][0] == ["controlnet", "sdxl", "qwen-zimage"]
+
+
+def test_package_installs_qwen_zimage_extra() -> None:
+    root = Path(__file__).parents[1]
+    project = (root / "pyproject.toml").read_text()
+    requirements = (root / "requirements.txt").read_text().splitlines()
+    test_script = (root / "scripts" / "test.sh").read_text()
+
+    match = re.search(r'dependencies = \["([^"]+)"\]', project)
+    assert match is not None
+    dependency = match.group(1)
+    assert dependency.startswith("remove-ai-watermarks[qwen-zimage]>=")
+    assert requirements == [dependency]
+    assert '"remove-ai-watermarks[qwen-zimage]==$LIBRARY_VERSION"' in test_script
+
+
+def test_qwen_zimage_uses_profile_fixed_settings(monkeypatch: Any) -> None:
+    from remove_ai_watermarks import image_io, invisible_engine
+
+    _stub_tensor_boundary(monkeypatch)
+    constructor_calls: list[dict[str, Any]] = []
+    removal_calls: list[dict[str, Any]] = []
+
+    class StubEngine:
+        def __init__(self, **kwargs: Any) -> None:
+            constructor_calls.append(kwargs)
+
+        def remove_watermark(self, **kwargs: Any) -> Path:
+            removal_calls.append(kwargs)
+            return kwargs["output_path"]
+
+    monkeypatch.setattr(invisible_engine, "InvisibleEngine", StubEngine)
+    monkeypatch.setattr(invisible_engine, "is_available", lambda: True)
+    monkeypatch.setattr(image_io, "imwrite", lambda path, image: True)
+    monkeypatch.setattr(
+        image_io,
+        "imread",
+        lambda path: np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    node = nodes.RAIWRemoveInvisibleWatermark()
+    outputs = [
+        node.remove(
+            object(),
+            pipeline="qwen-zimage",
+            strength=0.0,
+            steps=30,
+            guidance_scale=7.5,
+            seed=0,
+            device="cuda",
+            min_resolution=1536,
+            adaptive_polish=True,
+            upscaler="esrgan",
+            cpu_offload=True,
+            tile=True,
+            tile_size=768,
+            tile_overlap=96,
+        )
+        for _ in range(2)
+    ]
+
+    assert outputs == [("tensor",), ("tensor",)]
+    assert constructor_calls == [
+        {
+            "device": "cuda",
+            "pipeline": "qwen-zimage",
+            "controlnet_conditioning_scale": 1.0,
+            "cpu_offload": True,
+            "progress_callback": constructor_calls[0]["progress_callback"],
+        }
+    ]
+    assert len(removal_calls) == 2
+    for call in removal_calls:
+        assert {
+            key: value
+            for key, value in call.items()
+            if key not in {"image_path", "output_path"}
+        } == {
+            "strength": None,
+            "num_inference_steps": None,
+            "guidance_scale": None,
+            "seed": 0,
+            "humanize": 0.0,
+            "unsharp": 0.0,
+            "max_resolution": 0,
+            "min_resolution": 1536,
+            "adaptive_polish": False,
+            "upscaler": "esrgan",
+            "tile": True,
+            "tile_size": 768,
+            "tile_overlap": 96,
+        }
+
+
 def test_visible_forced_mark_uses_backend_api(monkeypatch: Any) -> None:
     from remove_ai_watermarks import watermark_registry
 
@@ -125,6 +224,7 @@ def test_library_contract_contains_every_node_parameter() -> None:
                 "pipeline",
                 "progress_callback",
                 "controlnet_conditioning_scale",
+                "cpu_offload",
             },
         ),
         (
@@ -143,6 +243,9 @@ def test_library_contract_contains_every_node_parameter() -> None:
                 "unsharp",
                 "adaptive_polish",
                 "upscaler",
+                "tile",
+                "tile_size",
+                "tile_overlap",
             },
         ),
     ]

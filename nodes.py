@@ -210,10 +210,11 @@ class RAIWEraseRegion:
 
 
 class RAIWRemoveInvisibleWatermark:
-    """Remove invisible AI watermarks (SynthID) via SDXL diffusion regeneration.
+    """Remove invisible AI watermarks (SynthID) via diffusion regeneration.
 
-    Requires the GPU/ML extra of the library:
-        pip install "remove-ai-watermarks[gpu]"
+    The node package installs the full qwen-zimage dependency group, which also
+    includes the normal GPU/ML dependencies. The qwen-zimage profile itself is
+    CUDA-only.
 
     ComfyUI tensors carry no file metadata, so the vendor-adaptive strength
     default falls back to the unknown-vendor value. Set ``strength`` > 0 to
@@ -225,7 +226,7 @@ class RAIWRemoveInvisibleWatermark:
         return {
             "required": {
                 "image": ("IMAGE",),
-                "pipeline": (["controlnet", "sdxl"], {"default": "controlnet"}),
+                "pipeline": (["controlnet", "sdxl", "qwen-zimage"], {"default": "controlnet"}),
                 "strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
                 "steps": ("INT", {"default": 30, "min": 1, "max": 200}),
             },
@@ -240,6 +241,10 @@ class RAIWRemoveInvisibleWatermark:
                 "min_resolution": ("INT", {"default": 1024, "min": 0, "max": 8192}),
                 "adaptive_polish": ("BOOLEAN", {"default": True}),
                 "upscaler": (["lanczos", "esrgan"], {"default": "lanczos"}),
+                "cpu_offload": ("BOOLEAN", {"default": False}),
+                "tile": ("BOOLEAN", {"default": False}),
+                "tile_size": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 16}),
+                "tile_overlap": ("INT", {"default": 128, "min": 0, "max": 1024, "step": 16}),
             },
         }
 
@@ -247,6 +252,10 @@ class RAIWRemoveInvisibleWatermark:
     RETURN_NAMES = ("image",)
     FUNCTION = "remove"
     CATEGORY = CATEGORY
+
+    def __init__(self) -> None:
+        self._engine: Any = None
+        self._engine_config: tuple[str, str, float, bool] | None = None
 
     def remove(
         self,
@@ -264,6 +273,10 @@ class RAIWRemoveInvisibleWatermark:
         min_resolution: int = 1024,
         adaptive_polish: bool = True,
         upscaler: str = "lanczos",
+        cpu_offload: bool = False,
+        tile: bool = False,
+        tile_size: int = 1024,
+        tile_overlap: int = 128,
     ) -> tuple[Any]:
         try:
             from remove_ai_watermarks.invisible_engine import (
@@ -272,21 +285,35 @@ class RAIWRemoveInvisibleWatermark:
             )
         except Exception as exc:  # diffusers/torch not installed
             raise RuntimeError(
-                "The invisible-watermark node needs the GPU/ML extra. Install it with: "
-                "pip install 'remove-ai-watermarks[gpu]'"
+                "The invisible-watermark node needs its diffusion dependencies. "
+                "Reinstall the node dependencies or run: "
+                "pip install 'remove-ai-watermarks[qwen-zimage]'"
             ) from exc
         if not is_available():
             raise RuntimeError(
-                "Diffusion dependencies are unavailable. Install the GPU/ML extra: "
-                "pip install 'remove-ai-watermarks[gpu]'"
+                "Diffusion dependencies are unavailable. Reinstall the node dependencies "
+                "or run: pip install 'remove-ai-watermarks[qwen-zimage]'"
             )
 
-        engine = InvisibleEngine(
-            device=None if device == "auto" else device,
-            pipeline=pipeline,
-            controlnet_conditioning_scale=controlnet_scale,
-            progress_callback=lambda msg: log.info("invisible: %s", msg),
-        )
+        engine_config = (device, pipeline, controlnet_scale, cpu_offload)
+        if self._engine_config != engine_config:
+            self._engine = InvisibleEngine(
+                device=None if device == "auto" else device,
+                pipeline=pipeline,
+                controlnet_conditioning_scale=controlnet_scale,
+                cpu_offload=cpu_offload,
+                progress_callback=lambda msg: log.info("invisible: %s", msg),
+            )
+            self._engine_config = engine_config
+        engine = self._engine
+
+        # Saved ComfyUI workflows retain widget values when the pipeline changes.
+        # Let the library resolve qwen-zimage's fixed graph defaults, and keep only
+        # the node-owned postprocessing override here.
+        fixed_profile = pipeline == "qwen-zimage"
+        profile_steps = None if fixed_profile else steps
+        profile_guidance_scale = None if fixed_profile else guidance_scale
+        profile_adaptive_polish = False if fixed_profile else adaptive_polish
 
         frames = _tensor_to_bgr_list(image)
         out: list[np.ndarray[Any, Any]] = []
@@ -302,15 +329,18 @@ class RAIWRemoveInvisibleWatermark:
                     image_path=src,
                     output_path=dst,
                     strength=strength if strength > 0 else None,
-                    num_inference_steps=steps,
-                    guidance_scale=guidance_scale,
+                    num_inference_steps=profile_steps,
+                    guidance_scale=profile_guidance_scale,
                     seed=seed,
                     humanize=humanize,
                     unsharp=unsharp,
                     max_resolution=max_resolution,
                     min_resolution=min_resolution,
-                    adaptive_polish=adaptive_polish,
+                    adaptive_polish=profile_adaptive_polish,
                     upscaler=upscaler,
+                    tile=tile,
+                    tile_size=tile_size,
+                    tile_overlap=tile_overlap,
                 )
                 cleaned = image_io.imread(str(result_path))
                 out.append(cleaned)
