@@ -14,3 +14,9 @@ def test_sync_publish_checks_out_the_synchronized_commit() -> None:
     assert "checkout_ref:" in publish
     assert "ref: ${{ inputs.checkout_ref || github.sha }}" in publish
     assert "checkout_ref: main" in sync
+
+
+def test_publish_action_preserves_the_prepared_checkout() -> None:
+    publish = (_ROOT / ".github/workflows/publish.yml").read_text()
+
+    assert "skip_checkout: true" in publish
