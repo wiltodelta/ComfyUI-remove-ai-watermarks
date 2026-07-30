@@ -40,7 +40,21 @@ jobs:
             library_version=$(curl -fsSL https://pypi.org/pypi/remove-ai-watermarks/json \
               | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
           fi
-          curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null
+          release_visible=false
+          for attempt in $(seq 1 30); do
+            if curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null; then
+              release_visible=true
+              break
+            fi
+            echo "Published release is not visible on PyPI yet (attempt $attempt)"
+            if [ "$attempt" -lt 30 ]; then
+              sleep 10
+            fi
+          done
+          if [ "$release_visible" != true ]; then
+            echo "::error::remove-ai-watermarks $library_version did not become visible on PyPI"
+            exit 1
+          fi
           registry_version=$(curl -fsSL https://api.comfy.org/nodes/remove-ai-watermarks/versions \
             | python -c "import json,sys; print(max(json.load(sys.stdin), key=lambda row: tuple(map(int, row['version'].split('.'))))['version'])")
           echo "library=$library_version" >> "$GITHUB_OUTPUT"

@@ -42,7 +42,45 @@ jobs:
         run: |
           bash scripts/test.sh
       - name: Publish custom node
+        id: publish
+        continue-on-error: true
         uses: Comfy-Org/publish-node-action@main
         with:
           personal_access_token: ${{ secrets.COMFY_REGISTRY_TOKEN }}
           skip_checkout: true
+      - name: Verify published node version
+        if: steps.publish.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          node_version=$(
+            python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+          )
+          for attempt in $(seq 1 30); do
+            if versions=$(curl -fsSL https://api.comfy.org/nodes/remove-ai-watermarks/versions); then
+              if printf '%s' "$versions" | python -c '
+          import json
+          import sys
+
+          target = sys.argv[1]
+          raise SystemExit(
+              0
+              if any(
+                  row["version"] == target
+                  and row["status"] == "NodeVersionStatusActive"
+                  and row.get("downloadUrl")
+                  for row in json.load(sys.stdin)
+              )
+              else 1
+          )
+          ' "$node_version"; then
+                echo "Node version $node_version is present in the registry"
+                exit 0
+              fi
+            fi
+            echo "Node version $node_version is not visible yet (attempt $attempt)"
+            if [ "$attempt" -lt 30 ]; then
+              sleep 10
+            fi
+          done
+          echo "::error::Publishing failed and node version $node_version is absent from the registry"
+          exit 1
