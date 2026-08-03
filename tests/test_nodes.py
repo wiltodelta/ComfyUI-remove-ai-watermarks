@@ -71,10 +71,18 @@ def test_input_choices_follow_library_types() -> None:
     assert erase["backend"][0] == list(get_args(region_eraser.Backend))
 
 
-def test_invisible_node_exposes_qwen_zimage_profile() -> None:
-    required = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()["required"]
+def test_invisible_node_offers_no_knob_the_profiles_cannot_honor() -> None:
+    """Model id, step count, CFG and device are fixed by the profile.
 
-    assert required["pipeline"][0] == ["controlnet", "sdxl", "qwen-zimage"]
+    The library deleted every one of them; a widget for any of them can only produce
+    an error several frames below the queue prompt. (Which list of pipelines the
+    widget offers is asserted against the library in
+    ``test_the_pipeline_widget_offers_exactly_the_library_profiles``.)
+    """
+    types = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()
+    widgets = set(types["required"]) | set(types["optional"])
+
+    assert not widgets & {"steps", "guidance_scale", "device", "model", "min_resolution", "upscaler"}
 
 
 def test_package_installs_qwen_zimage_extra() -> None:
@@ -91,7 +99,7 @@ def test_package_installs_qwen_zimage_extra() -> None:
     assert '"remove-ai-watermarks[qwen-zimage]==$LIBRARY_VERSION"' in test_script
 
 
-def test_qwen_zimage_uses_profile_fixed_settings(monkeypatch: Any) -> None:
+def test_the_node_defers_every_fixed_setting_to_the_library(monkeypatch: Any) -> None:
     from remove_ai_watermarks import image_io, invisible_engine
 
     _stub_tensor_boundary(monkeypatch)
@@ -121,13 +129,8 @@ def test_qwen_zimage_uses_profile_fixed_settings(monkeypatch: Any) -> None:
             object(),
             pipeline="qwen-zimage",
             strength=0.0,
-            steps=30,
-            guidance_scale=7.5,
             seed=0,
-            device="cuda",
-            min_resolution=1536,
-            adaptive_polish=True,
-            upscaler="esrgan",
+            adaptive_polish="profile default",
             cpu_offload=True,
             tile=True,
             tile_size=768,
@@ -137,9 +140,9 @@ def test_qwen_zimage_uses_profile_fixed_settings(monkeypatch: Any) -> None:
     ]
 
     assert outputs == [("tensor",), ("tensor",)]
+    # Built once for two prompts, and with no device: the engine detects CUDA itself.
     assert constructor_calls == [
         {
-            "device": "cuda",
             "pipeline": "qwen-zimage",
             "controlnet_conditioning_scale": 1.0,
             "cpu_offload": True,
@@ -154,15 +157,13 @@ def test_qwen_zimage_uses_profile_fixed_settings(monkeypatch: Any) -> None:
             if key not in {"image_path", "output_path"}
         } == {
             "strength": None,
-            "num_inference_steps": None,
-            "guidance_scale": None,
             "seed": 0,
             "humanize": 0.0,
             "unsharp": 0.0,
             "max_resolution": 0,
-            "min_resolution": 1536,
-            "adaptive_polish": False,
-            "upscaler": "esrgan",
+            # None, not False: the library picks the profile's answer. Sending False
+            # here would pin qwen-zimage's default and silently override sdxl-zimage's.
+            "adaptive_polish": None,
             "tile": True,
             "tile_size": 768,
             "tile_overlap": 96,
@@ -220,7 +221,6 @@ def test_library_contract_contains_every_node_parameter() -> None:
             InvisibleEngine.__init__,
             {
                 "self",
-                "device",
                 "pipeline",
                 "progress_callback",
                 "controlnet_conditioning_scale",
@@ -234,15 +234,11 @@ def test_library_contract_contains_every_node_parameter() -> None:
                 "image_path",
                 "output_path",
                 "strength",
-                "num_inference_steps",
-                "guidance_scale",
                 "seed",
                 "humanize",
                 "max_resolution",
-                "min_resolution",
                 "unsharp",
                 "adaptive_polish",
-                "upscaler",
                 "tile",
                 "tile_size",
                 "tile_overlap",
@@ -252,3 +248,48 @@ def test_library_contract_contains_every_node_parameter() -> None:
 
     for target, required in contracts:
         assert required <= set(inspect.signature(target).parameters)
+
+
+def test_the_node_never_passes_a_parameter_the_library_dropped() -> None:
+    """A subset check cannot catch a parameter the node sends and the library removed.
+
+    ``num_inference_steps``, ``guidance_scale``, ``min_resolution`` and ``upscaler``
+    were all still being passed here after the library deleted them, and the contract
+    above stayed green because it only asserts the library HAS what the node needs --
+    never that the node sends nothing the library refuses.
+    """
+    from remove_ai_watermarks.invisible_engine import InvisibleEngine
+
+    accepted = set(inspect.signature(InvisibleEngine.remove_watermark).parameters)
+    source = (Path(__file__).parents[1] / "nodes.py").read_text()
+    call = source[source.index("result_path = engine.remove_watermark(") :]
+    call = call[: call.index("\n                )")]
+    sent = set(re.findall(r"^\s+(\w+)=", call, re.MULTILINE))
+
+    assert sent, "could not parse the remove_watermark call site"
+    assert sent <= accepted, f"node sends parameters the library does not accept: {sorted(sent - accepted)}"
+
+
+def test_the_pipeline_widget_offers_exactly_the_library_profiles() -> None:
+    """The widget list and its offline fallback must both track the library.
+
+    The node shipped `controlnet`/`sdxl` with `controlnet` as the DEFAULT long after
+    the library deleted those profiles, so every default-configured run raised
+    "Unsupported pipeline" -- against the node's own pinned library floor.
+    """
+    from remove_ai_watermarks._internal.watermark_profiles import DEFAULT_PROFILE, PROFILE_CHOICES
+
+    widget = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()["required"]["pipeline"]
+    assert tuple(widget[0]) == tuple(PROFILE_CHOICES)
+    assert widget[1]["default"] == DEFAULT_PROFILE
+    assert nodes._FALLBACK_PROFILE_CHOICES == tuple(PROFILE_CHOICES)
+    assert nodes.DEFAULT_PROFILE == DEFAULT_PROFILE
+
+
+def test_the_polish_widget_maps_to_the_library_tri_state() -> None:
+    assert nodes._resolve_polish_widget("profile default") is None
+    assert nodes._resolve_polish_widget("on") is True
+    assert nodes._resolve_polish_widget("off") is False
+    # A graph saved before the widget became three-way carries a raw bool.
+    assert nodes._resolve_polish_widget(True) is True
+    assert nodes._resolve_polish_widget(False) is False

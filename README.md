@@ -36,9 +36,8 @@ GPU diffusion stack and the separate DiffSynth runtime. Model weights are not
 bundled and download on first use.
 
 Optional backends: `pip install "remove-ai-watermarks[migan]"` for the
-memory-conscious MI-GAN fill, `pip install "remove-ai-watermarks[lama]"` for the
-heavier LaMa fill, and `pip install "remove-ai-watermarks[esrgan]"` for the
-Real-ESRGAN upscaler in the invisible node.
+memory-conscious MI-GAN fill and `pip install "remove-ai-watermarks[lama]"` for
+the heavier LaMa fill.
 
 ## Notes
 
@@ -46,11 +45,19 @@ Real-ESRGAN upscaler in the invisible node.
   vendor-adaptive strength default falls back to the unknown-vendor value
   defined by the installed library. Set the `strength` input above 0 to override
   it.
-- `qwen-zimage` is CUDA-only. It uses its fixed four-step Lightning schedule,
-  CFG 1.0, native-resolution policy, and no adaptive polish regardless of stale
-  SDXL widget values stored in an existing workflow. Seed 0 is the certified
-  default. Use `tile` for large inputs and `cpu_offload` to keep the face stack
-  off the GPU between calls.
+- Both profiles are CUDA-only: `qwen-zimage` (the default) and `sdxl-zimage`,
+  the same recipe and face stage on an SDXL global pass. There is no CPU or MPS
+  path, so the node has no device widget.
+- The invisible node exposes no `steps`, `guidance_scale`, `model` or `device`
+  input. Each profile pins its model stack, its per-stage distilled schedule and
+  CFG 1.0, so a widget for any of them could only produce an error inside the
+  run. Seed 0 is the certified default.
+- `adaptive_polish` is three-way. `profile default` lets the library decide (off
+  for `qwen-zimage`, whose output already matches the input's detail level; on
+  for `sdxl-zimage`); `on`/`off` override it. A workflow saved when this input
+  was a checkbox still loads, and its stored true/false counts as an override.
+- Use `tile` for large inputs and `cpu_offload` to stream both stacks instead of
+  pinning them in VRAM.
 - Proprietary invisible-watermark verification is vendor-specific. Use the
   matching provider oracle. Higher `strength` removes more but drifts further
   from the original.
