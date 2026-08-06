@@ -1,1 +1,1 @@
-remove-ai-watermarks[qwen-zimage]>=0.25.0
+remove-ai-watermarks[qwen-zimage]>=0.26.0
