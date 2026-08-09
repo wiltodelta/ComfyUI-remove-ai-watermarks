@@ -1,8 +1,9 @@
 # ComfyUI-remove-ai-watermarks
 
-ComfyUI custom nodes for [remove-ai-watermarks](https://github.com/wiltodelta/remove-ai-watermarks):
-remove visible AI watermarks, erase arbitrary regions, detect known marks, and
-strip invisible SynthID watermarks by diffusion regeneration, all inside a
+ComfyUI custom nodes for
+[remove-ai-watermarks](https://github.com/wiltodelta/remove-ai-watermarks):
+identify provenance, remove visible and invisible AI watermarks, strip AI
+metadata, run the complete image pipeline, and erase arbitrary regions inside a
 ComfyUI graph.
 
 ## Nodes
@@ -12,10 +13,16 @@ ComfyUI graph.
 | **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and detection sensitivity. No GPU is required for detection or the default cv2 fill. |
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
 | **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
-| **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration that defeats the SynthID pixel watermark. Choose ControlNet, SDXL, or the CUDA-only Qwen-Image plus Z-Image profile for the highest face fidelity. |
+| **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration through the CUDA-only `qwen-zimage` or `sdxl-zimage` profile. |
+| **Identify Provenance (RAIW)** | Reads an original file and returns the versioned provenance report, verdict, platform, and confidence. |
+| **Strip AI Metadata (RAIW)** | Losslessly strips and verifies AI metadata from an original file, then returns the cleaned image and path. |
+| **Remove All Watermarks (RAIW)** | Runs visible removal, conditional invisible removal, and verified metadata stripping against one original file. |
 
-All pixel nodes operate in-memory on the ComfyUI image batch. The invisible node
-writes each frame to a temp file, runs the diffusion engine, and reads it back.
+The four pixel nodes operate in-memory on ComfyUI image batches. The three
+provenance-aware nodes accept a file path because ComfyUI `IMAGE` tensors do not
+carry the original C2PA, EXIF, XMP, IPTC, or container data. Their source and
+output paths must be accessible to the ComfyUI server. A blank output path writes
+`<source>_clean.<ext>` beside the source without overwriting it.
 
 ## Install
 
@@ -31,9 +38,9 @@ git clone https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks
 pip install -r ComfyUI-remove-ai-watermarks/requirements.txt
 ```
 
-The package installs `remove-ai-watermarks[qwen-zimage]`, including the normal
-GPU diffusion stack and the separate DiffSynth runtime. Model weights are not
-bundled and download on first use.
+The package installs `remove-ai-watermarks[qwen-zimage,heif]`, including the
+pixel runtime, HEIC/HEIF/AVIF decoding, GPU diffusion stack, and DiffSynth
+runtime. Model weights are not bundled and download on first use.
 
 Optional backends: `pip install "remove-ai-watermarks[migan]"` for the
 memory-conscious MI-GAN fill and `pip install "remove-ai-watermarks[lama]"` for
@@ -41,10 +48,11 @@ the heavier LaMa fill.
 
 ## Notes
 
-- ComfyUI image tensors carry no file metadata, so the invisible node's
-  vendor-adaptive strength default falls back to the unknown-vendor value
-  defined by the installed library. Set the `strength` input above 0 to override
-  it.
+- ComfyUI image tensors carry no file metadata. The in-memory invisible node
+  therefore uses resolution-adaptive strength for `qwen-zimage` and the
+  unknown-vendor strength for `sdxl-zimage`. `Remove All Watermarks` reads the
+  original file and can use its vendor provenance. Set `strength` above 0 to
+  override either default.
 - Both profiles are CUDA-only: `qwen-zimage` (the default) and `sdxl-zimage`,
   the same recipe and face stage on an SDXL global pass. There is no CPU or MPS
   path, so the node has no device widget.
@@ -61,9 +69,9 @@ the heavier LaMa fill.
 - Proprietary invisible-watermark verification is vendor-specific. Use the
   matching provider oracle. Higher `strength` removes more but drifts further
   from the original.
-- `remove-ai-watermarks` depends on `opencv-python-headless`. If your ComfyUI
-  install already ships `opencv-python`, both provide `cv2` and coexist; if you
-  hit a cv2 conflict, keep a single OpenCV distribution in the environment.
+- The selected extras install `opencv-python-headless`. If your ComfyUI install
+  already ships `opencv-python`, both provide `cv2` and coexist; if you hit a
+  cv2 conflict, keep a single OpenCV distribution in the environment.
 
 ## Release synchronization
 

@@ -8,6 +8,7 @@ processes the batch frame by frame.
 
 from __future__ import annotations
 
+import json
 import logging
 import tempfile
 from pathlib import Path
@@ -43,7 +44,7 @@ def _profile_choices() -> tuple[str, ...]:
     """Pipeline names for the widget, from the library when it is importable."""
     try:
         from remove_ai_watermarks._internal.watermark_profiles import PROFILE_CHOICES
-    except Exception:
+    except Exception:  # noqa: BLE001 - optional dependency failures must not hide other nodes
         return _FALLBACK_PROFILE_CHOICES
     return tuple(PROFILE_CHOICES)
 
@@ -103,6 +104,35 @@ def _mask_to_uint8_list(mask: torch.Tensor, count: int) -> list[np.ndarray[Any, 
     return out
 
 
+def _source_path(value: str) -> Path:
+    """Resolve and validate a user-selected source file."""
+    path = Path(value).expanduser()
+    if not value.strip() or not path.is_file():
+        raise ValueError(f"Source file does not exist: {value or '<empty>'}")
+    return path
+
+
+def _output_path(source: Path, value: str) -> Path:
+    """Resolve an optional output path without overwriting the source by default."""
+    if value.strip():
+        output = Path(value).expanduser()
+    else:
+        output = source.with_name(f"{source.stem}_clean{source.suffix}")
+    if output.resolve() == source.resolve():
+        raise ValueError("Output path must differ from the source path")
+    return output
+
+
+def _path_to_tensor(path: Path) -> Any:
+    """Read a file result back into one ComfyUI IMAGE tensor."""
+    from remove_ai_watermarks import image_io
+
+    bgr = image_io.imread(path)
+    if bgr is None:
+        raise ValueError(f"Could not read output image: {path}")
+    return _bgr_list_to_tensor([bgr])
+
+
 # --- nodes -----------------------------------------------------------------
 
 
@@ -157,7 +187,9 @@ class RAIWRemoveVisibleWatermark:
                     backend=backend,
                     sensitivity=sensitivity,
                 )
-                infos.append(", ".join(labels) if labels else "no visible mark detected")
+                infos.append(
+                    ", ".join(labels) if labels else "no visible mark detected"
+                )
             else:
                 known = watermark_registry.get_mark(mark)
                 result, _ = known.remove(bgr, backend=backend, force=True)
@@ -181,16 +213,22 @@ class RAIWDetectVisibleWatermark:
     def detect(self, image: torch.Tensor) -> tuple[str, bool, float, str]:
         from remove_ai_watermarks import watermark_registry
 
-        bgr = _tensor_to_bgr_list(image)[0]  # report on the first frame
-        detections = watermark_registry.detect_marks(bgr)
-        lines = [
-            f"{d.label}: {'YES' if d.detected else 'no'} ({d.confidence:.2f})" for d in detections
+        frames = _tensor_to_bgr_list(image)
+        detections_by_frame = [watermark_registry.detect_marks(bgr) for bgr in frames]
+        lines: list[str] = []
+        for index, detections in enumerate(detections_by_frame):
+            prefix = f"frame {index}: " if len(frames) > 1 else ""
+            lines.extend(
+                f"{prefix}{d.label}: {'YES' if d.detected else 'no'} ({d.confidence:.2f})"
+                for d in detections
+            )
+        fired = [
+            d for detections in detections_by_frame for d in detections if d.detected
         ]
-        fired = [d for d in detections if d.detected]
-        best = max(detections, key=lambda d: d.confidence) if detections else None
+        best = max(fired, key=lambda d: d.confidence) if fired else None
         any_detected = bool(fired)
         confidence = best.confidence if best else 0.0
-        mark_key = best.key if (best and best.detected) else ""
+        mark_key = best.key if best else ""
         return ("\n".join(lines), any_detected, confidence, mark_key)
 
 
@@ -265,19 +303,40 @@ class RAIWRemoveInvisibleWatermark:
             "required": {
                 "image": ("IMAGE",),
                 "pipeline": (list(_profile_choices()), {"default": DEFAULT_PROFILE}),
-                "strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "strength": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
             },
             "optional": {
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
-                "controlnet_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05}),
-                "humanize": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.1}),
-                "unsharp": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1}),
+                "controlnet_scale": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05},
+                ),
+                "humanize": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.1},
+                ),
+                "unsharp": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+                ),
                 "max_resolution": ("INT", {"default": 0, "min": 0, "max": 8192}),
-                "adaptive_polish": (_POLISH_CHOICES, {"default": _POLISH_PROFILE_DEFAULT}),
+                "adaptive_polish": (
+                    _POLISH_CHOICES,
+                    {"default": _POLISH_PROFILE_DEFAULT},
+                ),
                 "cpu_offload": ("BOOLEAN", {"default": False}),
                 "tile": ("BOOLEAN", {"default": False}),
-                "tile_size": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 16}),
-                "tile_overlap": ("INT", {"default": 128, "min": 0, "max": 1024, "step": 16}),
+                "tile_size": (
+                    "INT",
+                    {"default": 1024, "min": 256, "max": 4096, "step": 16},
+                ),
+                "tile_overlap": (
+                    "INT",
+                    {"default": 128, "min": 0, "max": 1024, "step": 16},
+                ),
             },
         }
 
@@ -366,11 +425,220 @@ class RAIWRemoveInvisibleWatermark:
         return (_bgr_list_to_tensor(out),)
 
 
+class RAIWIdentifyProvenance:
+    """Return the library's versioned provenance report for an original file."""
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        return {
+            "required": {"source_path": ("STRING", {"default": ""})},
+            "optional": {
+                "check_visible": ("BOOLEAN", {"default": True}),
+                "check_invisible": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("report_json", "verdict", "platform", "confidence")
+    FUNCTION = "identify"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def identify(
+        self,
+        source_path: str,
+        check_visible: bool = True,
+        check_invisible: bool = True,
+    ) -> tuple[str, str, str, str]:
+        from remove_ai_watermarks.identify import identify
+
+        report = identify(
+            _source_path(source_path),
+            check_visible=check_visible,
+            check_invisible=check_invisible,
+        )
+        verdict = {True: "AI-generated", False: "not AI", None: "unknown"}[
+            report.is_ai_generated
+        ]
+        return (
+            json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
+            verdict,
+            report.platform or "",
+            report.confidence,
+        )
+
+
+class RAIWStripMetadata:
+    """Losslessly strip AI provenance metadata from an original file."""
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        return {
+            "required": {"source_path": ("STRING", {"default": ""})},
+            "optional": {
+                "output_path": ("STRING", {"default": ""}),
+                "keep_standard": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "output_path", "info")
+    FUNCTION = "strip"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def strip(
+        self,
+        source_path: str,
+        output_path: str = "",
+        keep_standard: bool = True,
+    ) -> tuple[Any, str, str]:
+        from remove_ai_watermarks.metadata import strip_and_verify
+
+        source = _source_path(source_path)
+        output = _output_path(source, output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        cleaned, remaining = strip_and_verify(
+            source, output, keep_standard=keep_standard
+        )
+        if remaining:
+            fields = ", ".join(sorted(remaining))
+            raise RuntimeError(f"AI metadata survived stripping: {fields}")
+        return (
+            _path_to_tensor(cleaned),
+            str(cleaned),
+            "AI metadata stripped and verified",
+        )
+
+
+class RAIWRemoveAllWatermarks:
+    """Run visible, invisible, and metadata removal against an original file."""
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        from remove_ai_watermarks import watermark_registry
+
+        return {
+            "required": {
+                "source_path": ("STRING", {"default": ""}),
+                "pipeline": (list(_profile_choices()), {"default": DEFAULT_PROFILE}),
+            },
+            "optional": {
+                "output_path": ("STRING", {"default": ""}),
+                "force_invisible": ("BOOLEAN", {"default": False}),
+                "backend": (
+                    list(get_args(watermark_registry.Backend)),
+                    {"default": "auto"},
+                ),
+                "sensitivity": (
+                    list(get_args(watermark_registry.Sensitivity)),
+                    {"default": "auto"},
+                ),
+                "strength": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01},
+                ),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF}),
+                "controlnet_scale": (
+                    "FLOAT",
+                    {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05},
+                ),
+                "humanize": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.1},
+                ),
+                "unsharp": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+                ),
+                "max_resolution": ("INT", {"default": 0, "min": 0, "max": 8192}),
+                "adaptive_polish": (
+                    _POLISH_CHOICES,
+                    {"default": _POLISH_PROFILE_DEFAULT},
+                ),
+                "cpu_offload": ("BOOLEAN", {"default": False}),
+                "tile": ("BOOLEAN", {"default": False}),
+                "tile_size": (
+                    "INT",
+                    {"default": 1024, "min": 256, "max": 4096, "step": 16},
+                ),
+                "tile_overlap": (
+                    "INT",
+                    {"default": 128, "min": 0, "max": 1024, "step": 16},
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("image", "output_path", "info")
+    FUNCTION = "remove"
+    CATEGORY = CATEGORY
+    OUTPUT_NODE = True
+
+    def remove(
+        self,
+        source_path: str,
+        pipeline: str = DEFAULT_PROFILE,
+        output_path: str = "",
+        force_invisible: bool = False,
+        backend: str = "auto",
+        sensitivity: str = "auto",
+        strength: float = 0.0,
+        seed: int = 0,
+        controlnet_scale: float = 1.0,
+        humanize: float = 0.0,
+        unsharp: float = 0.0,
+        max_resolution: int = 0,
+        adaptive_polish: str | bool = _POLISH_PROFILE_DEFAULT,
+        cpu_offload: bool = False,
+        tile: bool = False,
+        tile_size: int = 1024,
+        tile_overlap: int = 128,
+    ) -> tuple[Any, str, str]:
+        from remove_ai_watermarks import InvisibleOptions, remove_all
+
+        source = _source_path(source_path)
+        output = _output_path(source, output_path)
+        progress: list[str] = []
+        options = InvisibleOptions(
+            strength=strength if strength > 0 else None,
+            pipeline=pipeline,
+            seed=seed,
+            humanize=humanize,
+            unsharp=unsharp,
+            adaptive_polish=_resolve_polish_widget(adaptive_polish),
+            max_resolution=max_resolution,
+            controlnet_conditioning_scale=controlnet_scale,
+            cpu_offload=cpu_offload,
+            tile=tile,
+            tile_size=tile_size,
+            tile_overlap=tile_overlap,
+        )
+        result = remove_all(
+            source,
+            output,
+            backend=backend,
+            sensitivity=sensitivity,
+            invisible=options,
+            force=force_invisible,
+            progress=lambda stage, detail: progress.append(
+                f"{stage}: {detail or 'none'}"
+            ),
+        )
+        info = "; ".join(progress)
+        if result.invisible == "unavailable":
+            info += "; warning: invisible removal unavailable"
+        return (_path_to_tensor(result.output), str(result.output), info)
+
+
 NODE_CLASS_MAPPINGS = {
     "RAIWRemoveVisibleWatermark": RAIWRemoveVisibleWatermark,
     "RAIWDetectVisibleWatermark": RAIWDetectVisibleWatermark,
     "RAIWEraseRegion": RAIWEraseRegion,
     "RAIWRemoveInvisibleWatermark": RAIWRemoveInvisibleWatermark,
+    "RAIWIdentifyProvenance": RAIWIdentifyProvenance,
+    "RAIWStripMetadata": RAIWStripMetadata,
+    "RAIWRemoveAllWatermarks": RAIWRemoveAllWatermarks,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -378,4 +646,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RAIWDetectVisibleWatermark": "Detect Visible Watermark (RAIW)",
     "RAIWEraseRegion": "Erase Region (RAIW)",
     "RAIWRemoveInvisibleWatermark": "Remove Invisible Watermark / SynthID (RAIW)",
+    "RAIWIdentifyProvenance": "Identify Provenance (RAIW)",
+    "RAIWStripMetadata": "Strip AI Metadata (RAIW)",
+    "RAIWRemoveAllWatermarks": "Remove All Watermarks (RAIW)",
 }

@@ -11,11 +11,13 @@ log = logging.getLogger(__name__)
 
 _NODE_VERSION = re.compile(r'^version = "(\d+)\.(\d+)\.(\d+)"$', re.MULTILINE)
 _LIBRARY_DEPENDENCY = re.compile(
-    r"(remove-ai-watermarks(?:\[[a-z0-9-]+\])?>=)([0-9]+\.[0-9]+\.[0-9]+)"
+    r"(remove-ai-watermarks(?:\[[a-z0-9,-]+\])?>=)([0-9]+\.[0-9]+\.[0-9]+)"
 )
 
 
-def sync_text(pyproject: str, requirements: str, *, library_version: str) -> tuple[str, str, bool]:
+def sync_text(
+    pyproject: str, requirements: str, *, library_version: str
+) -> tuple[str, str, bool]:
     """Return synchronized files and whether a node-version bump was needed."""
     if re.fullmatch(r"\d+\.\d+\.\d+", library_version) is None:
         raise ValueError("library_version must use X.Y.Z format")
@@ -24,14 +26,17 @@ def sync_text(pyproject: str, requirements: str, *, library_version: str) -> tup
     requirement_matches = _LIBRARY_DEPENDENCY.findall(requirements)
     if len(dependency_matches) != 1 or len(requirement_matches) != 1:
         raise ValueError("expected one library dependency in each package file")
-    if dependency_matches[0][1] == library_version and requirement_matches[0][1] == library_version:
+    if (
+        dependency_matches[0][1] == library_version
+        and requirement_matches[0][1] == library_version
+    ):
         return pyproject, requirements, False
 
     version_match = _NODE_VERSION.search(pyproject)
     if version_match is None:
         raise ValueError("expected one semantic node version in pyproject.toml")
     major, minor, patch = (int(value) for value in version_match.groups())
-    node_version = f'{major}.{minor}.{patch + 1}'
+    node_version = f"{major}.{minor}.{patch + 1}"
 
     updated_project, version_count = _NODE_VERSION.subn(
         f'version = "{node_version}"',
@@ -68,7 +73,10 @@ def main() -> None:
     if changed:
         args.pyproject.write_text(updated_project)
         args.requirements.write_text(updated_requirements)
-        log.info("Updated the library floor to %s and bumped the node version", args.library_version)
+        log.info(
+            "Updated the library floor to %s and bumped the node version",
+            args.library_version,
+        )
     else:
         log.info("Library floor is already %s", args.library_version)
 

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_args
 
 import numpy as np
@@ -60,6 +62,43 @@ def test_visible_auto_uses_current_registry_api(monkeypatch: Any) -> None:
     assert calls == [("cv2", "strict")]
 
 
+def test_detect_reports_every_batch_frame_and_best_fired_mark(monkeypatch: Any) -> None:
+    from remove_ai_watermarks import watermark_registry
+
+    frames = [np.zeros((8, 8, 3), dtype=np.uint8)] * 2
+    monkeypatch.setattr(nodes, "_tensor_to_bgr_list", lambda image: frames)
+    detections = iter(
+        [
+            [
+                SimpleNamespace(
+                    label="fired", detected=True, confidence=0.6, key="fired"
+                ),
+                SimpleNamespace(
+                    label="near miss", detected=False, confidence=0.9, key="near"
+                ),
+            ],
+            [
+                SimpleNamespace(
+                    label="second", detected=True, confidence=0.7, key="second"
+                )
+            ],
+        ]
+    )
+    monkeypatch.setattr(
+        watermark_registry, "detect_marks", lambda image: next(detections)
+    )
+
+    report, detected, confidence, mark = nodes.RAIWDetectVisibleWatermark().detect(
+        object()
+    )
+
+    assert "frame 0: fired: YES (0.60)" in report
+    assert "frame 1: second: YES (0.70)" in report
+    assert detected is True
+    assert confidence == 0.7
+    assert mark == "second"
+
+
 def test_input_choices_follow_library_types() -> None:
     from remove_ai_watermarks import region_eraser, watermark_registry
 
@@ -82,7 +121,14 @@ def test_invisible_node_offers_no_knob_the_profiles_cannot_honor() -> None:
     types = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()
     widgets = set(types["required"]) | set(types["optional"])
 
-    assert not widgets & {"steps", "guidance_scale", "device", "model", "min_resolution", "upscaler"}
+    assert not widgets & {
+        "steps",
+        "guidance_scale",
+        "device",
+        "model",
+        "min_resolution",
+        "upscaler",
+    }
 
 
 def test_package_installs_qwen_zimage_extra() -> None:
@@ -94,9 +140,138 @@ def test_package_installs_qwen_zimage_extra() -> None:
     match = re.search(r'dependencies = \["([^"]+)"\]', project)
     assert match is not None
     dependency = match.group(1)
-    assert dependency.startswith("remove-ai-watermarks[qwen-zimage]>=")
+    assert dependency.startswith("remove-ai-watermarks[qwen-zimage,heif]>=")
     assert requirements == [dependency]
-    assert '"remove-ai-watermarks[qwen-zimage]==$LIBRARY_VERSION"' in test_script
+    assert '"remove-ai-watermarks[qwen-zimage,heif]==$LIBRARY_VERSION"' in test_script
+
+
+def test_core_file_nodes_are_registered() -> None:
+    assert {
+        "RAIWIdentifyProvenance",
+        "RAIWStripMetadata",
+        "RAIWRemoveAllWatermarks",
+    } <= nodes.NODE_CLASS_MAPPINGS.keys()
+
+
+def test_identify_node_returns_versioned_report(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from remove_ai_watermarks import identify as identify_module
+
+    source = tmp_path / "source.png"
+    source.write_bytes(b"fixture")
+    report = SimpleNamespace(
+        is_ai_generated=True,
+        platform="Example AI",
+        confidence="high",
+        to_dict=lambda: {"schema_version": 1, "is_ai_generated": True},
+    )
+    monkeypatch.setattr(identify_module, "identify", lambda *args, **kwargs: report)
+
+    payload, verdict, platform, confidence = nodes.RAIWIdentifyProvenance().identify(
+        str(source)
+    )
+
+    assert json.loads(payload) == {"schema_version": 1, "is_ai_generated": True}
+    assert (verdict, platform, confidence) == ("AI-generated", "Example AI", "high")
+
+
+def test_identify_node_preserves_negative_verdict(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from remove_ai_watermarks import identify as identify_module
+
+    source = tmp_path / "source.png"
+    source.write_bytes(b"fixture")
+    report = SimpleNamespace(
+        is_ai_generated=False,
+        platform=None,
+        confidence="medium",
+        to_dict=lambda: {"schema_version": 1, "is_ai_generated": False},
+    )
+    monkeypatch.setattr(identify_module, "identify", lambda *args, **kwargs: report)
+
+    _, verdict, platform, confidence = nodes.RAIWIdentifyProvenance().identify(
+        str(source)
+    )
+
+    assert (verdict, platform, confidence) == ("not AI", "", "medium")
+
+
+def test_strip_metadata_node_verifies_and_returns_file(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from remove_ai_watermarks import metadata
+
+    source = tmp_path / "source.png"
+    output = tmp_path / "nested" / "clean.png"
+    source.write_bytes(b"fixture")
+
+    def strip_and_verify(
+        src: Path, dst: Path, *, keep_standard: bool
+    ) -> tuple[Path, dict[str, str]]:
+        assert src == source
+        assert keep_standard is False
+        dst.write_bytes(b"clean")
+        return dst, {}
+
+    monkeypatch.setattr(metadata, "strip_and_verify", strip_and_verify)
+    monkeypatch.setattr(nodes, "_path_to_tensor", lambda path: "tensor")
+
+    image, path, info = nodes.RAIWStripMetadata().strip(
+        str(source), str(output), keep_standard=False
+    )
+
+    assert (image, path, info) == (
+        "tensor",
+        str(output),
+        "AI metadata stripped and verified",
+    )
+
+
+def test_remove_all_node_forwards_current_library_options(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    import remove_ai_watermarks as raiw
+
+    source = tmp_path / "source.png"
+    output = tmp_path / "clean.png"
+    source.write_bytes(b"fixture")
+    calls: list[dict[str, Any]] = []
+
+    def remove_all(src: Path, dst: Path, **kwargs: Any) -> Any:
+        calls.append({"source": src, "output": dst, **kwargs})
+        kwargs["progress"]("visible", "Google Gemini sparkle")
+        kwargs["progress"]("invisible", "removed")
+        kwargs["progress"]("metadata", "stripped")
+        dst.write_bytes(b"clean")
+        return SimpleNamespace(output=dst, invisible="removed")
+
+    monkeypatch.setattr(raiw, "remove_all", remove_all)
+    monkeypatch.setattr(nodes, "_path_to_tensor", lambda path: "tensor")
+
+    image, path, info = nodes.RAIWRemoveAllWatermarks().remove(
+        str(source),
+        pipeline="sdxl-zimage",
+        output_path=str(output),
+        force_invisible=True,
+        backend="cv2",
+        sensitivity="strict",
+        strength=0.4,
+        tile=True,
+    )
+
+    assert (image, path) == ("tensor", str(output))
+    assert info == (
+        "visible: Google Gemini sparkle; invisible: removed; metadata: stripped"
+    )
+    call = calls[0]
+    assert call["force"] is True
+    assert call["backend"] == "cv2"
+    assert call["sensitivity"] == "strict"
+    assert call["invisible"].pipeline == "sdxl-zimage"
+    assert call["invisible"].strength == 0.4
+    assert call["invisible"].tile is True
 
 
 def test_the_node_defers_every_fixed_setting_to_the_library(monkeypatch: Any) -> None:
@@ -267,7 +442,9 @@ def test_the_node_never_passes_a_parameter_the_library_dropped() -> None:
     sent = set(re.findall(r"^\s+(\w+)=", call, re.MULTILINE))
 
     assert sent, "could not parse the remove_watermark call site"
-    assert sent <= accepted, f"node sends parameters the library does not accept: {sorted(sent - accepted)}"
+    assert sent <= accepted, (
+        f"node sends parameters the library does not accept: {sorted(sent - accepted)}"
+    )
 
 
 def test_the_pipeline_widget_offers_exactly_the_library_profiles() -> None:
@@ -277,7 +454,10 @@ def test_the_pipeline_widget_offers_exactly_the_library_profiles() -> None:
     the library deleted those profiles, so every default-configured run raised
     "Unsupported pipeline" -- against the node's own pinned library floor.
     """
-    from remove_ai_watermarks._internal.watermark_profiles import DEFAULT_PROFILE, PROFILE_CHOICES
+    from remove_ai_watermarks._internal.watermark_profiles import (
+        DEFAULT_PROFILE,
+        PROFILE_CHOICES,
+    )
 
     widget = nodes.RAIWRemoveInvisibleWatermark.INPUT_TYPES()["required"]["pipeline"]
     assert tuple(widget[0]) == tuple(PROFILE_CHOICES)
