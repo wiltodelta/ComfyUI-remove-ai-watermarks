@@ -82,6 +82,22 @@ version, and publishes only after those tests pass. A daily scheduled run is
 the recovery path for an interrupted release dispatch. A failed compatibility
 test blocks publication instead of exposing an incompatible node update.
 
+### The package name is the registry id
+
+`name` in `pyproject.toml` is the ComfyUI Registry node id, not a local label.
+Publishing under a different one creates a second listing and orphans every
+existing install, so it is not something to change casually.
+
+It deliberately matches the PyPI library this node depends on. uv reads that as
+a self-dependency and refuses to resolve the project, which looks like a naming
+mistake and is not one: this repository is installed with pip, through
+`requirements.txt` and `scripts/test.sh` in CI, and pip resolves the dependency
+from PyPI without complaint. There is no `uv.lock` here and `uv run` is not part
+of the workflow.
+
+Editing `pyproject.toml` on `main` triggers the publish workflow, so treat any
+change to this file as a release action rather than an edit.
+
 ## License
 
 Apache-2.0, matching the upstream library.
