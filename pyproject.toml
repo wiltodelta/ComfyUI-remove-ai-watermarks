@@ -1,11 +1,11 @@
 [project]
 name = "remove-ai-watermarks"
 description = "Remove registered AI-provenance marks, invisible watermarks, and selected regions inside ComfyUI."
-version = "0.1.26"
+version = "0.1.27"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 classifiers = ["Operating System :: OS Independent"]
-dependencies = ["remove-ai-watermarks[qwen-zimage,heif]>=0.30.0"]
+dependencies = ["remove-ai-watermarks[qwen-zimage,heif]>=0.30.1"]
 
 [project.urls]
 Repository = "https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks"
