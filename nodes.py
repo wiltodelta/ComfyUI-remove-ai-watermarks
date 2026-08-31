@@ -23,13 +23,13 @@ log = logging.getLogger(__name__)
 
 CATEGORY = "remove-ai-watermarks"
 
-# The library's two remaining profiles. Duplicated as a literal rather than imported
+# The library's three profiles. Duplicated as a literal rather than imported
 # at module scope on purpose: INPUT_TYPES runs when ComfyUI loads the node pack, and a
 # hard library import there would take the visible-mark nodes down with it whenever the
 # diffusion dependencies are absent. _profile_choices() prefers the library's own list
 # when it can be read cheaply, and tests/test_nodes.py asserts this fallback still
 # matches it -- so a future profile change surfaces here rather than in a user's queue.
-_FALLBACK_PROFILE_CHOICES = ("qwen-zimage", "sdxl-zimage")
+_FALLBACK_PROFILE_CHOICES = ("qwen-zimage", "sdxl-zimage", "chroma-zimage")
 DEFAULT_PROFILE = "qwen-zimage"
 
 # The library resolves an unset adaptive polish per profile (off for qwen-zimage, whose

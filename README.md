@@ -13,7 +13,7 @@ ComfyUI graph.
 | **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and detection sensitivity. No GPU is required for detection or the default cv2 fill. |
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
 | **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
-| **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration through the CUDA-only `qwen-zimage` or `sdxl-zimage` profile. |
+| **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration through the CUDA-only `qwen-zimage`, `sdxl-zimage`, or `chroma-zimage` profile. |
 | **Identify Provenance (RAIW)** | Reads an original file and returns the versioned provenance report, verdict, platform, and confidence. |
 | **Strip AI Metadata (RAIW)** | Losslessly strips and verifies AI metadata from an original file, then returns the cleaned image and path. |
 | **Remove All Watermarks (RAIW)** | Runs visible removal, conditional invisible removal, and verified metadata stripping against one original file. |
@@ -53,7 +53,7 @@ the heavier LaMa fill.
   unknown-vendor strength for `sdxl-zimage`. `Remove All Watermarks` reads the
   original file and can use its vendor provenance. Set `strength` above 0 to
   override either default.
-- Both profiles are CUDA-only: `qwen-zimage` (the default) and `sdxl-zimage`,
+- All three profiles are CUDA-only: `qwen-zimage` (the default), `sdxl-zimage`, and `chroma-zimage`,
   the same recipe and face stage on an SDXL global pass. There is no CPU or MPS
   path, so the node has no device widget.
 - The invisible node exposes no `steps`, `guidance_scale`, `model` or `device`
