@@ -29,7 +29,7 @@ CATEGORY = "remove-ai-watermarks"
 # diffusion dependencies are absent. _profile_choices() prefers the library's own list
 # when it can be read cheaply, and tests/test_nodes.py asserts this fallback still
 # matches it -- so a future profile change surfaces here rather than in a user's queue.
-_FALLBACK_PROFILE_CHOICES = ("qwen-zimage", "sdxl-zimage", "chroma-zimage")
+_FALLBACK_PROFILE_CHOICES = ("qwen-zimage", "sdxl-zimage", "chroma-zimage", "auto")
 DEFAULT_PROFILE = "qwen-zimage"
 
 # The library resolves an unset adaptive polish per profile (off for qwen-zimage, whose
