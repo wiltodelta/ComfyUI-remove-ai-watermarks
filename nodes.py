@@ -191,9 +191,16 @@ class RAIWRemoveVisibleWatermark:
                     ", ".join(labels) if labels else "no visible mark detected"
                 )
             else:
+                # An explicit mark bypasses the detector, so `sensitivity` -- which only
+                # decides how hard a BORDERLINE detection is trusted -- has nothing left
+                # to decide. Say so instead of accepting the widget and dropping it: a
+                # user who set `strict` here got no effect and no warning.
                 known = watermark_registry.get_mark(mark)
                 result, _ = known.remove(bgr, backend=backend, force=True)
-                infos.append(f"removed {mark} (forced)")
+                note = f"removed {mark} (forced)"
+                if sensitivity != "auto":
+                    note += f"; sensitivity={sensitivity} ignored (detection is skipped for an explicit mark)"
+                infos.append(note)
             out.append(result)
         return (_bgr_list_to_tensor(out), " | ".join(infos))
 
@@ -599,6 +606,10 @@ class RAIWRemoveAllWatermarks:
 
         source = _source_path(source_path)
         output = _output_path(source, output_path)
+        # RAIWStripMetadata does this for the same `_output_path` result; without it
+        # the two sibling nodes disagree on whether a not-yet-existing output
+        # directory is the user's mistake or ours.
+        output.parent.mkdir(parents=True, exist_ok=True)
         progress: list[str] = []
         options = InvisibleOptions(
             strength=strength if strength > 0 else None,

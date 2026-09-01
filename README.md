@@ -10,7 +10,7 @@ ComfyUI graph.
 
 | Node | What it does |
 | --- | --- |
-| **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and detection sensitivity. No GPU is required for detection or the default cv2 fill. |
+| **Remove Visible Watermark (RAIW)** | Removes every detected registered AI-provenance mark when `mark = auto`, or forces one selected mark. Choose the fill backend and, for `mark = auto`, the detection sensitivity. No GPU is required for detection or the default cv2 fill. |
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
 | **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
 | **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration through the CUDA-only `qwen-zimage`, `sdxl-zimage`, `chroma-zimage`, or `auto` profile. |
@@ -61,6 +61,12 @@ the heavier LaMa fill.
   input. Each profile pins its model stack, its per-stage distilled schedule and
   CFG 1.0, so a widget for any of them could only produce an error inside the
   run. Seed 0 is the certified default.
+- `sensitivity` applies only to `mark = auto`. An explicit mark skips detection
+  entirely, so there is no borderline decision left to relax or tighten; the node
+  says so in its `info` output rather than dropping the setting silently.
+- The `inpaint` toggle does nothing. Since library 0.16 every visible mark uses
+  localize -> fill, so the switch has no path left to choose. It stays on the node
+  because removing a widget breaks every saved workflow that carries it.
 - `adaptive_polish` is three-way. `profile default` lets the library decide (off
   for `qwen-zimage`, whose output already matches the input's detail level; on
   for `sdxl-zimage`); `on`/`off` override it. A workflow saved when this input
