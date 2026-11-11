@@ -38,13 +38,9 @@ git clone https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks
 pip install -r ComfyUI-remove-ai-watermarks/requirements.txt
 ```
 
-The package installs `remove-ai-watermarks[qwen-zimage,heif]`, including the
-pixel runtime, HEIC/HEIF/AVIF decoding, GPU diffusion stack, and DiffSynth
-runtime. Model weights are not bundled and download on first use.
-
-Optional backends: `pip install "remove-ai-watermarks[migan]"` for the
-memory-conscious MI-GAN fill and `pip install "remove-ai-watermarks[lama]"` for
-the heavier LaMa fill.
+The package installs `remove-ai-watermarks[all,classify-onnx,text-draft]`,
+including video tools, HEIF decoding, diffusion, ONNX fill and classification,
+and OCR proposals. Model weights download on first use.
 
 ## Notes
 
@@ -109,3 +105,20 @@ change to this file as a release action rather than an edit.
 ## License
 
 Apache-2.0, matching the upstream library.
+
+## Complete operation nodes
+
+The `remove-ai-watermarks/operations` category exposes every installed library
+CLI operation with typed controls, plus the ONNX photo classifier and OCR draft
+proposals. This includes video processing and Seedance, text provenance and
+regeneration, photo/source classifiers, batch operations, regions, profiles, and
+quality parameters. Existing image tensor nodes remain available. Operation nodes
+accept paths on the ComfyUI server and return an output path, report, and exit code.
+File operations run on each queue, so changed files and deleted outputs are not
+hidden by workflow caching. They preserve the input; connect output paths to the appropriate image/video/text
+loader for the next workflow stage. Empty optional controls retain library defaults.
+
+The node package installs `all,classify-onnx,text-draft`. Use Python 3.12 for the
+complete backend selection. Image regeneration requires NVIDIA CUDA. Video VAE
+profiles can use CPU, MPS, or CUDA. Model weights download on first use. OCR results
+are proposals requiring operator verification, not verified manifest text.

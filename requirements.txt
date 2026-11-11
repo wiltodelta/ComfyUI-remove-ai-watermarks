@@ -1,1 +1,1 @@
-remove-ai-watermarks[qwen-zimage,heif]>=0.57.0
+remove-ai-watermarks[all,classify-onnx,text-draft]>=0.58.0

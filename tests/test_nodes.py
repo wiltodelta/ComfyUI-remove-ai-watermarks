@@ -24,7 +24,7 @@ def test_root_init_loads_without_package_context() -> None:
     module = importlib.util.module_from_spec(spec)
     module.__package__ = ""
     spec.loader.exec_module(module)
-    assert module.NODE_CLASS_MAPPINGS == nodes.NODE_CLASS_MAPPINGS
+    assert all(module.NODE_CLASS_MAPPINGS[key] is value for key, value in nodes.NODE_CLASS_MAPPINGS.items())
 
 
 def _stub_tensor_boundary(monkeypatch: Any) -> None:
@@ -140,9 +140,9 @@ def test_package_installs_qwen_zimage_extra() -> None:
     match = re.search(r'dependencies = \["([^"]+)"\]', project)
     assert match is not None
     dependency = match.group(1)
-    assert dependency.startswith("remove-ai-watermarks[qwen-zimage,heif]>=")
+    assert dependency.startswith("remove-ai-watermarks[all,classify-onnx,text-draft]>=")
     assert requirements == [dependency]
-    assert '"remove-ai-watermarks[qwen-zimage,heif]==$LIBRARY_VERSION"' in test_script
+    assert '"remove-ai-watermarks[all,classify-onnx,text-draft]==$LIBRARY_VERSION"' in test_script
 
 
 def test_core_file_nodes_are_registered() -> None:
