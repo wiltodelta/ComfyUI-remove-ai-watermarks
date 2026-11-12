@@ -1,1 +1,1 @@
-remove-ai-watermarks[all,classify-onnx,text-draft]>=0.58.1
+remove-ai-watermarks[all,classify-onnx,text-draft]>=0.59.0
