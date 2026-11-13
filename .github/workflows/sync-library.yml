@@ -41,8 +41,12 @@ jobs:
               | python -c "import json,sys; print(json.load(sys.stdin)['info']['version'])")
           fi
           release_visible=false
+          wheel_marker="remove_ai_watermarks-${library_version}-"
+          sdist_marker="remove_ai_watermarks-${library_version}.tar.gz"
           for attempt in $(seq 1 30); do
-            if curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null; then
+            if curl -fsSL "https://pypi.org/pypi/remove-ai-watermarks/$library_version/json" >/dev/null \
+              && simple_index=$(curl -fsSL --compressed -H "Accept: application/vnd.pypi.simple.v1+json" "https://pypi.org/simple/remove-ai-watermarks/") \
+              && { grep -Fq "$wheel_marker" <<<"$simple_index" || grep -Fq "$sdist_marker" <<<"$simple_index"; }; then
               release_visible=true
               break
             fi

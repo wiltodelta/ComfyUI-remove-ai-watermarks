@@ -36,5 +36,17 @@ def test_sync_retries_pypi_release_visibility() -> None:
     sync = (_ROOT / ".github/workflows/sync-library.yml").read_text()
 
     assert "for attempt in $(seq 1 30)" in sync
+    assert "https://pypi.org/simple/remove-ai-watermarks/" in sync
+    assert "application/vnd.pypi.simple.v1+json" in sync
+    assert "--compressed" in sync
+    assert "remove_ai_watermarks-${library_version}-" in sync
     assert "Published release is not visible on PyPI yet" in sync
     assert "did not become visible on PyPI" in sync
+
+
+def test_test_script_retries_uncached_pip_installs() -> None:
+    test_script = (_ROOT / "scripts/test.sh").read_text()
+
+    assert "python -m pip install --no-cache-dir" in test_script
+    assert "for attempt in $(seq 1 5)" in test_script
+    assert "python -m pip install --requirement requirements.txt pytest" in test_script
