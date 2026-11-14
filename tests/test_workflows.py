@@ -29,6 +29,8 @@ def test_publish_verifies_registry_state_after_action_failure() -> None:
     assert "continue-on-error: true" in publish
     assert "steps.publish.outcome == 'failure'" in publish
     assert "Verify published node version" in publish
+    # Comfy-Org/publish-node-action@main activates Python 3.10 on PATH, so post-publish checks cannot import tomllib.
+    assert "tomllib" not in publish
     assert 'row["status"] == "NodeVersionStatusActive"' in publish
 
 
