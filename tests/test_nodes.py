@@ -140,9 +140,9 @@ def test_package_installs_qwen_zimage_extra() -> None:
     match = re.search(r'dependencies = \["([^"]+)"\]', project)
     assert match is not None
     dependency = match.group(1)
-    assert dependency.startswith("remove-ai-watermarks[all,classify-onnx,text-draft]>=")
+    assert dependency.startswith("remove-ai-watermarks[all,text-draft]>=")
     assert requirements == [dependency]
-    assert '"remove-ai-watermarks[all,classify-onnx,text-draft]==$LIBRARY_VERSION"' in test_script
+    assert '"remove-ai-watermarks[all,text-draft]==$LIBRARY_VERSION"' in test_script
 
 
 def test_core_file_nodes_are_registered() -> None:

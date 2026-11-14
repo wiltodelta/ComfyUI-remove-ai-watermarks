@@ -16,7 +16,7 @@ install_with_retry() {
 }
 
 if [[ -n "${LIBRARY_VERSION:-}" ]]; then
-  install_with_retry "remove-ai-watermarks[all,classify-onnx,text-draft]==$LIBRARY_VERSION" pytest
+  install_with_retry "remove-ai-watermarks[all,text-draft]==$LIBRARY_VERSION" pytest
 else
   python -m pip install --requirement requirements.txt pytest
 fi

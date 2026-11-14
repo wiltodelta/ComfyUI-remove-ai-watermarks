@@ -5,7 +5,7 @@ version = "0.1.74"
 license = { file = "LICENSE" }
 requires-python = ">=3.11,<3.14"
 classifiers = ["Operating System :: OS Independent"]
-dependencies = ["remove-ai-watermarks[all,classify-onnx,text-draft]>=0.61.0"]
+dependencies = ["remove-ai-watermarks[all,text-draft]>=0.61.0"]
 
 [project.urls]
 Repository = "https://github.com/wiltodelta/ComfyUI-remove-ai-watermarks"
