@@ -473,3 +473,70 @@ def test_the_polish_widget_maps_to_the_library_tri_state() -> None:
     # A graph saved before the widget became three-way carries a raw bool.
     assert nodes._resolve_polish_widget(True) is True
     assert nodes._resolve_polish_widget(False) is False
+
+
+def test_clean_audio_tensor_node_roundtrip_and_vendor_routing(monkeypatch: Any) -> None:
+    import torch
+    from remove_ai_watermarks import audio as audio_mod
+
+    t = torch.linspace(0.0, 0.25, 11025, dtype=torch.float32)
+    waveform = (0.2 * torch.sin(2.0 * 3.14159265 * 440.0 * t)).unsqueeze(0).unsqueeze(0)
+    comfy_audio = {"waveform": waveform, "sample_rate": 44100}
+
+    seen_kwargs: list[dict[str, Any]] = []
+
+    def fake_remove_audio(source: Path, output: Path, **kwargs: Any) -> Any:
+        import shutil
+
+        seen_kwargs.append(kwargs)
+        shutil.copy2(source, output)
+        return SimpleNamespace(
+            skipped=False,
+            output=output,
+            method="dac",
+            verified_removed=None,
+            quality_passed=True,
+        )
+
+    monkeypatch.setattr(audio_mod, "remove_audio_invisible", fake_remove_audio)
+    out_audio, info = nodes.RAIWCleanAudio().clean(comfy_audio, method="auto", scheme="auto", vendor="suno")
+    assert out_audio["sample_rate"] == 44100
+    assert tuple(out_audio["waveform"].shape) == (1, 1, 11025)
+    assert "cleaned via dac" in info
+    assert seen_kwargs
+
+
+def test_clean_video_tensor_node_roundtrip_with_audio(monkeypatch: Any) -> None:
+    import torch
+    from remove_ai_watermarks import video as video_mod
+
+    frames = torch.full((6, 64, 96, 3), 0.25, dtype=torch.float32)
+    t = torch.linspace(0.0, 0.5, 22050, dtype=torch.float32)
+    comfy_audio = {"waveform": (0.15 * torch.sin(2.0 * 3.14159265 * 440.0 * t)).unsqueeze(0).unsqueeze(0), "sample_rate": 44100}
+
+    def fake_remove_video_all(source: Path, output: Path, **_kwargs: Any) -> Any:
+        import shutil
+
+        shutil.copy2(source, output)
+        return SimpleNamespace(
+            output=output,
+            visible_mark="veo",
+            visible_removed_frames=6,
+            total_frames=6,
+            invisible_removed=False,
+            audio_status="skipped",
+        )
+
+    monkeypatch.setattr(video_mod, "remove_video_all", fake_remove_video_all)
+    out_images, out_audio, out_fps, info = nodes.RAIWCleanVideo().clean(
+        frames,
+        fps=12.0,
+        mark="auto",
+        audio=comfy_audio,
+    )
+    assert tuple(out_images.shape) == (6, 64, 96, 3)
+    assert out_audio["sample_rate"] == 44100
+    assert out_audio["waveform"].shape[0] == 1
+    assert abs(out_fps - 12.0) < 0.5
+    assert "visible_mark=veo" in info
+

@@ -17,8 +17,10 @@ ComfyUI graph.
 | **Identify Provenance (RAIW)** | Reads an original file and returns the versioned provenance report, verdict, platform, and confidence. |
 | **Strip AI Metadata (RAIW)** | Losslessly strips and verifies AI metadata from an original file, then returns the cleaned image and path. |
 | **Remove All Watermarks (RAIW)** | Runs visible removal, conditional invisible removal, and verified metadata stripping against one original file. |
+| **Clean Audio Watermark (RAIW)** | Cleans ComfyUI `AUDIO` tensors (`{"waveform": [B, C, N], "sample_rate": sr}`) through the library's neural (`dac`, `encodec`, `combined`) and spectral audio profiles with optional `--vendor` cohort selection. |
+| **Clean Video Frames (RAIW)** | Cleans ComfyUI video frame batches (`IMAGE` `[F, H, W, C]` + `fps` + optional `AUDIO`) for visible AI generator marks, optional invisible video profiles (`synthid`, `wan21-*`), and audio watermarks. |
 
-The four pixel nodes operate in-memory on ComfyUI image batches. The three
+The image, audio, and video tensor nodes operate directly on ComfyUI tensors. The three
 provenance-aware nodes accept a file path because ComfyUI `IMAGE` tensors do not
 carry the original C2PA, EXIF, XMP, IPTC, or container data. Their source and
 output paths must be accessible to the ComfyUI server. A blank output path writes

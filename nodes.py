@@ -648,6 +648,370 @@ class RAIWRemoveAllWatermarks:
         return (_path_to_tensor(result.output), str(result.output), info)
 
 
+_FALLBACK_AUDIO_SCHEMES = (
+    "auto",
+    "audioseal",
+    "wavmark",
+    "perth",
+    "silentcipher",
+    "silentcipher16",
+    "all",
+)
+_FALLBACK_AUDIO_METHODS = (
+    "auto",
+    "dac",
+    "spectral",
+    "encodec",
+    "combined",
+    "bigvgan",
+    "mimi",
+    "focalcodec",
+)
+_FALLBACK_AUDIO_VENDORS = (
+    "auto",
+    "google",
+    "elevenlabs",
+    "suno",
+    "udio",
+    "openai",
+    "cartesia",
+    "meta",
+    "resemble",
+    "microsoft",
+)
+_FALLBACK_VIDEO_MARKS = (
+    "sora",
+    "veo",
+    "dreamina",
+    "seedance",
+    "doubao",
+    "dola",
+    "hailuo",
+    "vidu",
+    "wan",
+    "kling",
+)
+_FALLBACK_VIDEO_PROFILES = (
+    "auto",
+    "synthid",
+    "seedance-experimental",
+    "wan21-synthid-experimental",
+    "wan21-seedance-experimental",
+)
+
+
+def _audio_scheme_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import AUDIO_SCHEMES
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_AUDIO_SCHEMES)
+    ordered = ["auto", *(s for s in AUDIO_SCHEMES if s != "auto")]
+    return ordered
+
+
+def _audio_method_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import AudioMethod
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_AUDIO_METHODS)
+    return list(get_args(AudioMethod))
+
+
+def _audio_vendor_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import AUDIO_VENDORS
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_AUDIO_VENDORS)
+    return list(AUDIO_VENDORS)
+
+
+def _video_mark_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks.video_visible import VIDEO_VISIBLE_MARKS
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_VIDEO_MARKS)
+    return list(VIDEO_VISIBLE_MARKS)
+
+
+def _video_profile_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks.video import VIDEO_INVISIBLE_PROFILES
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_VIDEO_PROFILES)
+    return ["auto", *(p for p in VIDEO_INVISIBLE_PROFILES if p != "auto")]
+
+
+def _write_tensor_wav(waveform_cn: Any, sample_rate: int, dest: Path) -> None:
+    """Write one (C, N) float32 tensor item to a 32-bit float WAV via audio_io.write_audio."""
+    from remove_ai_watermarks._internal.audio_io import AudioStreamInfo, write_audio
+
+    arr = np.ascontiguousarray(waveform_cn.detach().cpu().numpy(), dtype=np.float32)
+    if arr.ndim == 1:
+        arr = arr[None, :]
+    channels, frames = arr.shape
+    interleaved = np.ascontiguousarray(arr.T, dtype=np.float32)
+    info = AudioStreamInfo(
+        index=0,
+        sample_rate=int(sample_rate),
+        channels=int(channels),
+        codec="pcm_f32le",
+        start_time=None,
+        duration=None,
+    )
+    write_audio(info, dest, [interleaved], expected_frames=int(frames), bitexact=True)
+
+
+def _read_wav_to_tensor(source: Path) -> tuple[Any, int]:
+    """Decode an audio file into a (C, N) float32 torch.Tensor and sample_rate."""
+    import torch
+    from remove_ai_watermarks._internal.audio_io import probe_audio, read_audio
+
+    info = probe_audio(source)
+    chunks = list(read_audio(source, info))
+    if chunks:
+        interleaved = np.concatenate(chunks, axis=0)
+        cn = np.ascontiguousarray(interleaved.T, dtype=np.float32)
+    else:
+        cn = np.zeros((info.channels, 0), dtype=np.float32)
+    return torch.from_numpy(cn), int(info.sample_rate)
+
+
+class RAIWCleanAudio:
+    """In-memory ComfyUI AUDIO node for invisible AI audio watermark inspection and removal."""
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        return {
+            "required": {
+                "audio": ("AUDIO",),
+                "method": (_audio_method_choices(), {"default": "auto"}),
+                "scheme": (_audio_scheme_choices(), {"default": "auto"}),
+            },
+            "optional": {
+                "vendor": (_audio_vendor_choices(), {"default": "auto"}),
+                "allow_unverified": ("BOOLEAN", {"default": False}),
+                "force": ("BOOLEAN", {"default": False}),
+                "vocoder_device": (["cpu", "mps", "cuda"], {"default": "cpu"}),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO", "STRING")
+    RETURN_NAMES = ("audio", "info")
+    FUNCTION = "clean"
+    CATEGORY = CATEGORY
+
+    def clean(
+        self,
+        audio: dict[str, Any],
+        method: str = "auto",
+        scheme: str = "auto",
+        vendor: str = "auto",
+        allow_unverified: bool = False,
+        force: bool = False,
+        vocoder_device: str = "cpu",
+    ) -> tuple[dict[str, Any], str]:
+        import inspect
+
+        import torch
+        from remove_ai_watermarks.audio import remove_audio_invisible
+
+        waveform = audio["waveform"]
+        sample_rate = int(audio["sample_rate"])
+        if waveform.ndim == 2:
+            waveform = waveform.unsqueeze(0)
+        batch = int(waveform.shape[0])
+        accepted = set(inspect.signature(remove_audio_invisible).parameters)
+        cleaned_items: list[Any] = []
+        notes: list[str] = []
+        out_sr = sample_rate
+
+        with tempfile.TemporaryDirectory(prefix="raiw-comfy-audio-") as tmp:
+            tmp_dir = Path(tmp)
+            for idx in range(batch):
+                src_wav = tmp_dir / f"in_{idx}.wav"
+                out_wav = tmp_dir / f"out_{idx}.wav"
+                _write_tensor_wav(waveform[idx], sample_rate, src_wav)
+
+                eff_method = method
+                call_kwargs: dict[str, Any] = {
+                    "scheme": scheme,
+                    "allow_unverified": allow_unverified,
+                    "force": force,
+                    "vocoder_device": vocoder_device,
+                }
+                if "vendor" in accepted:
+                    call_kwargs["vendor"] = vendor
+                elif vendor not in ("", "auto"):
+                    if eff_method == "auto":
+                        eff_method = "spectral" if vendor == "meta" else "dac"
+                    call_kwargs["allow_unverified"] = True
+                call_kwargs["method"] = eff_method
+
+                res = remove_audio_invisible(src_wav, out_wav, **call_kwargs)
+                if res.skipped or res.output is None or not Path(res.output).is_file():
+                    cleaned_items.append(waveform[idx].detach().cpu().to(torch.float32))
+                    notes.append(f"item {idx}: skipped (no positive local watermark signal)")
+                else:
+                    item_tensor, out_sr = _read_wav_to_tensor(Path(res.output))
+                    cleaned_items.append(item_tensor)
+                    notes.append(
+                        f"item {idx}: cleaned via {res.method} (verified={res.verified_removed}, quality={res.quality_passed})"
+                    )
+
+        return ({"waveform": torch.stack(cleaned_items, dim=0), "sample_rate": out_sr}, "; ".join(notes))
+
+
+class RAIWCleanVideo:
+    """In-memory ComfyUI VIDEO frame-batch + optional AUDIO watermark cleaner."""
+
+    @classmethod
+    def INPUT_TYPES(cls) -> dict[str, Any]:
+        from remove_ai_watermarks import watermark_registry
+
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 240.0, "step": 0.1}),
+                "mark": (["auto", *_video_mark_choices()], {"default": "auto"}),
+            },
+            "optional": {
+                "audio": ("AUDIO",),
+                "backend": (list(get_args(watermark_registry.Backend)), {"default": "auto"}),
+                "temporal_consistency": ("BOOLEAN", {"default": True}),
+                "invisible": ("BOOLEAN", {"default": False}),
+                "profile": (_video_profile_choices(), {"default": "auto"}),
+                "audio_invisible": ("BOOLEAN", {"default": False}),
+                "audio_vendor": (_audio_vendor_choices(), {"default": "auto"}),
+                "device": (["auto", "cuda", "mps", "cpu"], {"default": "auto"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": False}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "STRING")
+    RETURN_NAMES = ("images", "audio", "fps", "info")
+    FUNCTION = "clean"
+    CATEGORY = CATEGORY
+
+    def clean(
+        self,
+        images: Any,
+        fps: float = 24.0,
+        mark: str = "auto",
+        audio: dict[str, Any] | None = None,
+        backend: str = "auto",
+        temporal_consistency: bool = True,
+        invisible: bool = False,
+        profile: str = "auto",
+        audio_invisible: bool = False,
+        audio_vendor: str = "auto",
+        device: str = "auto",
+        seed: int = 0,
+    ) -> tuple[Any, dict[str, Any], float, str]:
+        import subprocess
+
+        import cv2
+        import torch
+        from remove_ai_watermarks.video import remove_video_all
+        from remove_ai_watermarks.video_decode import open_video_capture
+        from remove_ai_watermarks.video_tools import require_video_tool
+
+        arr = images.detach().cpu().numpy()
+        if arr.ndim != 4 or arr.shape[0] == 0:
+            raise ValueError("images batch must be (F, H, W, C) with at least one video frame")
+        num_frames, height, width = int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2])
+        ffmpeg = require_video_tool("ffmpeg")
+        eff_audio_invisible = audio_invisible or (audio_vendor not in ("", "auto"))
+
+        with tempfile.TemporaryDirectory(prefix="raiw-comfy-video-") as tmp:
+            tmp_dir = Path(tmp)
+            src_mp4 = tmp_dir / "input.mp4"
+            out_mp4 = tmp_dir / "clean.mp4"
+
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-nostdin",
+                "-v",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "bgr24",
+                "-s:v",
+                f"{width}x{height}",
+                "-r",
+                f"{fps:.12g}",
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "libx264",
+                "-crf",
+                "12",
+                "-pix_fmt",
+                "yuv420p",
+                str(src_mp4),
+            ]
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                assert proc.stdin is not None
+                for i in range(num_frames):
+                    rgb = np.clip(arr[i, ..., :3] * 255.0, 0, 255).astype(np.uint8)
+                    bgr = np.ascontiguousarray(rgb[..., ::-1])
+                    proc.stdin.write(bgr.tobytes())
+                proc.stdin.close()
+                proc.stdin = None
+                stderr_out = proc.stderr.read() if proc.stderr is not None else b""
+                if proc.wait() != 0:
+                    raise RuntimeError(stderr_out.decode("utf-8", errors="replace").strip() or "ffmpeg staging failed")
+            finally:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+                if proc.stderr is not None:
+                    proc.stderr.close()
+
+            res = remove_video_all(
+                src_mp4,
+                out_mp4,
+                mark=mark,
+                backend=backend,
+                temporal_consistency=temporal_consistency,
+                include_invisible=invisible,
+                profile=profile,
+                seed=seed,
+                device=device,
+            )
+
+            cap = open_video_capture(Path(res.output))
+            out_frames: list[np.ndarray[Any, Any]] = []
+            out_fps = float(cap.get(cv2.CAP_PROP_FPS)) or float(fps)
+            try:
+                while True:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    out_frames.append(frame)
+            finally:
+                cap.release()
+            if not out_frames:
+                raise RuntimeError("Cleaned video contained no readable frames")
+
+            audio_note = ""
+            if audio is None:
+                out_audio = {"waveform": torch.zeros((1, 1, 1), dtype=torch.float32), "sample_rate": 44100}
+            elif eff_audio_invisible:
+                out_audio, audio_info = RAIWCleanAudio().clean(audio, method="auto", scheme="auto", vendor=audio_vendor)
+                audio_note = f"; audio=({audio_info})"
+            else:
+                out_audio = audio
+                audio_note = "; audio=passthrough"
+
+            info = (
+                f"visible_mark={res.visible_mark or 'none'} ({res.visible_removed_frames}/{res.total_frames} frames); "
+                f"invisible_removed={res.invisible_removed}{audio_note}"
+            )
+            return (_bgr_list_to_tensor(out_frames), out_audio, out_fps, info)
+
+
 NODE_CLASS_MAPPINGS = {
     "RAIWRemoveVisibleWatermark": RAIWRemoveVisibleWatermark,
     "RAIWDetectVisibleWatermark": RAIWDetectVisibleWatermark,
@@ -656,6 +1020,8 @@ NODE_CLASS_MAPPINGS = {
     "RAIWIdentifyProvenance": RAIWIdentifyProvenance,
     "RAIWStripMetadata": RAIWStripMetadata,
     "RAIWRemoveAllWatermarks": RAIWRemoveAllWatermarks,
+    "RAIWCleanAudio": RAIWCleanAudio,
+    "RAIWCleanVideo": RAIWCleanVideo,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -666,4 +1032,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "RAIWIdentifyProvenance": "Identify Provenance (RAIW)",
     "RAIWStripMetadata": "Strip AI Metadata (RAIW)",
     "RAIWRemoveAllWatermarks": "Remove All Watermarks (RAIW)",
+    "RAIWCleanAudio": "Clean Audio Watermark (RAIW)",
+    "RAIWCleanVideo": "Clean Video Frames (RAIW)",
 }
