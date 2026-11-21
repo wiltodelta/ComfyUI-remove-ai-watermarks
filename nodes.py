@@ -660,6 +660,7 @@ _FALLBACK_AUDIO_SCHEMES = (
 _FALLBACK_AUDIO_METHODS = (
     "auto",
     "dac",
+    "snac",
     "spectral",
     "encodec",
     "combined",
@@ -690,6 +691,14 @@ _FALLBACK_VIDEO_MARKS = (
     "vidu",
     "wan",
     "kling",
+    "jimeng",
+    "jimeng_pill",
+    "qwen",
+    "yuanbao",
+    "baidu",
+    "runninghub",
+    "microsoft",
+    "generic_ai_label",
 )
 _FALLBACK_VIDEO_PROFILES = (
     "auto",
@@ -878,9 +887,11 @@ class RAIWCleanVideo:
                 "audio": ("AUDIO",),
                 "backend": (list(get_args(watermark_registry.Backend)), {"default": "auto"}),
                 "temporal_consistency": ("BOOLEAN", {"default": True}),
+                "trim_bumper": ("BOOLEAN", {"default": False}),
                 "invisible": ("BOOLEAN", {"default": False}),
                 "profile": (_video_profile_choices(), {"default": "auto"}),
                 "audio_invisible": ("BOOLEAN", {"default": False}),
+                "audio_method": (_audio_method_choices(), {"default": "auto"}),
                 "audio_vendor": (_audio_vendor_choices(), {"default": "auto"}),
                 "device": (["auto", "cuda", "mps", "cpu"], {"default": "auto"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF, "control_after_generate": False}),
@@ -900,13 +911,16 @@ class RAIWCleanVideo:
         audio: dict[str, Any] | None = None,
         backend: str = "auto",
         temporal_consistency: bool = True,
+        trim_bumper: bool = False,
         invisible: bool = False,
         profile: str = "auto",
         audio_invisible: bool = False,
+        audio_method: str = "auto",
         audio_vendor: str = "auto",
         device: str = "auto",
         seed: int = 0,
     ) -> tuple[Any, dict[str, Any], float, str]:
+        import inspect
         import subprocess
 
         import cv2
@@ -969,17 +983,18 @@ class RAIWCleanVideo:
                 if proc.stderr is not None:
                     proc.stderr.close()
 
-            res = remove_video_all(
-                src_mp4,
-                out_mp4,
-                mark=mark,
-                backend=backend,
-                temporal_consistency=temporal_consistency,
-                include_invisible=invisible,
-                profile=profile,
-                seed=seed,
-                device=device,
-            )
+            video_kwargs: dict[str, Any] = {
+                "mark": mark,
+                "backend": backend,
+                "temporal_consistency": temporal_consistency,
+                "include_invisible": invisible,
+                "profile": profile,
+                "seed": seed,
+                "device": device,
+            }
+            if "trim_bumper" in inspect.signature(remove_video_all).parameters:
+                video_kwargs["trim_bumper"] = trim_bumper
+            res = remove_video_all(src_mp4, out_mp4, **video_kwargs)
 
             cap = open_video_capture(Path(res.output))
             out_frames: list[np.ndarray[Any, Any]] = []
@@ -999,7 +1014,9 @@ class RAIWCleanVideo:
             if audio is None:
                 out_audio = {"waveform": torch.zeros((1, 1, 1), dtype=torch.float32), "sample_rate": 44100}
             elif eff_audio_invisible:
-                out_audio, audio_info = RAIWCleanAudio().clean(audio, method="auto", scheme="auto", vendor=audio_vendor)
+                out_audio, audio_info = RAIWCleanAudio().clean(
+                    audio, method=audio_method, scheme="auto", vendor=audio_vendor
+                )
                 audio_note = f"; audio=({audio_info})"
             else:
                 out_audio = audio
