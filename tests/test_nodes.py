@@ -514,9 +514,13 @@ def test_clean_video_tensor_node_roundtrip_with_audio(monkeypatch: Any) -> None:
     t = torch.linspace(0.0, 0.5, 22050, dtype=torch.float32)
     comfy_audio = {"waveform": (0.15 * torch.sin(2.0 * 3.14159265 * 440.0 * t)).unsqueeze(0).unsqueeze(0), "sample_rate": 44100}
 
-    def fake_remove_video_all(source: Path, output: Path, **_kwargs: Any) -> Any:
+    real_video_all_params = set(inspect.signature(video_mod.remove_video_all).parameters)
+    seen_video_kwargs: list[dict[str, Any]] = []
+
+    def fake_remove_video_all(source: Path, output: Path, **kwargs: Any) -> Any:
         import shutil
 
+        seen_video_kwargs.append(kwargs)
         shutil.copy2(source, output)
         return SimpleNamespace(
             output=output,
@@ -532,6 +536,7 @@ def test_clean_video_tensor_node_roundtrip_with_audio(monkeypatch: Any) -> None:
         frames,
         fps=12.0,
         mark="auto",
+        profile="seedance-experimental",
         audio=comfy_audio,
     )
     assert tuple(out_images.shape) == (6, 64, 96, 3)
@@ -539,4 +544,139 @@ def test_clean_video_tensor_node_roundtrip_with_audio(monkeypatch: Any) -> None:
     assert out_audio["waveform"].shape[0] == 1
     assert abs(out_fps - 12.0) < 0.5
     assert "visible_mark=veo" in info
+    assert seen_video_kwargs[0]["invisible_profile"] == "seedance"
+    assert set(seen_video_kwargs[0]) <= real_video_all_params
 
+
+def test_audio_and_video_choices_and_extensions_match_v073_library() -> None:
+    from remove_ai_watermarks._internal.constants import (
+        AUDIO_EXTENSIONS,
+        AUDIO_METHODS,
+        AUDIO_SCHEMES,
+        AUDIO_VOCODER_DEVICES,
+        VIDEO_EXTENSIONS,
+        VIDEO_INVISIBLE_PROFILES,
+    )
+
+    retired = {"silentcipher16", "bigvgan", "mimi", "focalcodec"}
+    audio_inputs = nodes.RAIWCleanAudio.INPUT_TYPES()
+    video_inputs = nodes.RAIWCleanVideo.INPUT_TYPES()
+
+    schemes = audio_inputs["required"]["scheme"][0]
+    methods = audio_inputs["required"]["method"][0]
+    devices = audio_inputs["optional"]["vocoder_device"][0]
+    profiles = video_inputs["optional"]["profile"][0]
+    video_audio_methods = video_inputs["optional"]["audio_method"][0]
+
+    assert not (set(schemes) & retired)
+    assert not (set(methods) & retired)
+    assert not (set(video_audio_methods) & retired)
+    assert not (set(nodes._FALLBACK_AUDIO_SCHEMES) & retired)
+    assert not (set(nodes._FALLBACK_AUDIO_METHODS) & retired)
+
+    assert set(schemes) == set(AUDIO_SCHEMES)
+    assert tuple(nodes._FALLBACK_AUDIO_SCHEMES) == tuple(schemes)
+    assert tuple(methods) == tuple(AUDIO_METHODS)
+    assert tuple(nodes._FALLBACK_AUDIO_METHODS) == tuple(AUDIO_METHODS)
+    assert tuple(devices) == tuple(AUDIO_VOCODER_DEVICES)
+
+    assert profiles == ["auto", "synthid", "seedance", "wan21-synthid", "wan21-seedance"]
+    assert set(profiles) | set(nodes._legacy_video_profile_map()) == set(VIDEO_INVISIBLE_PROFILES)
+    assert tuple(nodes._FALLBACK_VIDEO_PROFILES) == tuple(profiles)
+    assert nodes.RAIWCleanVideo.VALIDATE_INPUTS(profile="seedance") is True
+    assert nodes.RAIWCleanVideo.VALIDATE_INPUTS(profile="seedance-experimental") is True
+    assert isinstance(nodes.RAIWCleanVideo.VALIDATE_INPUTS(profile="unknown-profile"), str)
+
+    expected_video_exts = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".flv"}
+    expected_audio_exts = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".oga", ".opus", ".aac", ".mka"}
+    assert nodes._video_extensions() == expected_video_exts == set(VIDEO_EXTENSIONS)
+    assert nodes._audio_extensions() == expected_audio_exts == set(AUDIO_EXTENSIONS)
+    assert set(nodes._FALLBACK_VIDEO_EXTENSIONS) == expected_video_exts
+    assert set(nodes._FALLBACK_AUDIO_EXTENSIONS) == expected_audio_exts
+
+
+def test_file_nodes_accept_all_video_and_audio_extensions(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from remove_ai_watermarks import audio as audio_mod
+    from remove_ai_watermarks import metadata as metadata_mod
+    from remove_ai_watermarks import video as video_mod
+
+    monkeypatch.setattr(
+        video_mod,
+        "identify_video",
+        lambda src, **_kw: SimpleNamespace(
+            is_ai_generated=True,
+            platform="Google Veo",
+            confidence="high",
+            source=src,
+            visible_mark="veo",
+        ),
+    )
+    monkeypatch.setattr(
+        audio_mod,
+        "identify_audio",
+        lambda src, **_kw: SimpleNamespace(
+            source=src,
+            metadata_markers={"c2pa_manifest": "Google LLC", "issuer": "Google LLC", "digital_source_type": "trainedAlgorithmicMedia"},
+            watermark_status="detected",
+        ),
+    )
+    monkeypatch.setattr(video_mod, "_video_markers_claim_ai", lambda markers: bool(markers))
+    monkeypatch.setattr(video_mod, "_platform_from_video_metadata", lambda _markers: "Google")
+    def _strip_stub(src: Path, dst: Path, *, keep_standard: bool) -> tuple[Path, dict[str, str]]:
+        del src, keep_standard
+        dst.write_bytes(b"clean")
+        return dst, {}
+
+    def _video_all_stub(src: Path, dst: Path, **_kw: Any) -> Any:
+        del src
+        dst.write_bytes(b"clean")
+        return SimpleNamespace(
+            output=dst,
+            visible_mark="veo",
+            invisible_removed=False,
+            remaining_metadata={},
+        )
+
+    def _audio_all_stub(src: Path, dst: Path, **_kw: Any) -> Any:
+        del src
+        dst.write_bytes(b"clean")
+        return SimpleNamespace(
+            output=dst,
+            invisible_applied=True,
+            invisible_result=SimpleNamespace(method="dac"),
+            remaining_metadata={},
+        )
+
+    monkeypatch.setattr(metadata_mod, "strip_and_verify", _strip_stub)
+    monkeypatch.setattr(video_mod, "remove_video_all", _video_all_stub)
+    monkeypatch.setattr(audio_mod, "remove_audio_all", _audio_all_stub)
+    monkeypatch.setattr(
+        nodes,
+        "_path_to_tensor",
+        lambda path: f"tensor:{path.suffix.lower()}",
+    )
+
+    identify_node = nodes.RAIWIdentifyProvenance()
+    strip_node = nodes.RAIWStripMetadata()
+    all_node = nodes.RAIWRemoveAllWatermarks()
+
+    cases = (
+        (nodes._FALLBACK_VIDEO_EXTENSIONS, "clip", "Google Veo", "visible: veo"),
+        (nodes._FALLBACK_AUDIO_EXTENSIONS, "track", "Google", "invisible: dac"),
+    )
+    for extensions, stem, expected_platform, expected_info in cases:
+        for ext in extensions:
+            src = tmp_path / f"{stem}{ext}"
+            src.write_bytes(b"media")
+            _, verdict, platform, conf = identify_node.identify(str(src))
+            assert (verdict, platform, conf) == ("AI-generated", expected_platform, "high")
+            tensor_tok, out_path, _ = strip_node.strip(str(src))
+            assert tensor_tok == f"tensor:{ext}"
+            assert Path(out_path).suffix.lower() == ext
+            all_out = tmp_path / f"all_{stem}{ext}"
+            tensor_tok2, out_path2, info2 = all_node.remove(str(src), output_path=str(all_out))
+            assert tensor_tok2 == f"tensor:{ext}"
+            assert Path(out_path2).suffix.lower() == ext
+            assert expected_info in info2

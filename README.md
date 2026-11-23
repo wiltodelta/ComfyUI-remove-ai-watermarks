@@ -14,11 +14,11 @@ ComfyUI graph.
 | **Detect Visible Watermark (RAIW)** | Reports per-mark detection confidence on the input image. Outputs a text report, a `detected` boolean, the best confidence, and the detected mark key. |
 | **Erase Region (RAIW)** | Inpaints whatever a `MASK` covers. Choose cv2 for the dependency-free path or LaMa for a heavier learned fill. |
 | **Remove Invisible Watermark / SynthID (RAIW)** | Diffusion regeneration through the CUDA-only `qwen-zimage`, `qwen21-zimage`, `sdxl-zimage`, `chroma-zimage`, or `auto` profile. |
-| **Identify Provenance (RAIW)** | Reads an original file and returns the versioned provenance report, verdict, platform, and confidence. |
-| **Strip AI Metadata (RAIW)** | Losslessly strips and verifies AI metadata from an original file, then returns the cleaned image and path. |
-| **Remove All Watermarks (RAIW)** | Runs visible removal, conditional invisible removal, and verified metadata stripping against one original file. |
-| **Clean Audio Watermark (RAIW)** | Cleans ComfyUI `AUDIO` tensors (`{"waveform": [B, C, N], "sample_rate": sr}`) through the library's neural (`dac`, `encodec`, `combined`) and spectral audio profiles with optional `--vendor` cohort selection. |
-| **Clean Video Frames (RAIW)** | Cleans ComfyUI video frame batches (`IMAGE` `[F, H, W, C]` + `fps` + optional `AUDIO`) for visible AI generator marks, optional invisible video profiles (`synthid`, `wan21-*`), and audio watermarks. |
+| **Identify Provenance (RAIW)** | Reads an original image, video (`.mp4`, `.mov`, `.m4v`, `.mkv`, `.webm`, `.avi`, `.flv`), or audio file (`.wav`, `.flac`, `.mp3`, `.m4a`, `.ogg`, `.oga`, `.opus`, `.aac`, `.mka`) and returns the versioned provenance report, verdict, platform, and confidence. |
+| **Strip AI Metadata (RAIW)** | Losslessly strips and verifies AI metadata from an original image, video, or audio file, then returns the cleaned preview tensor and output path. |
+| **Remove All Watermarks (RAIW)** | Runs visible removal, conditional invisible removal, and verified metadata stripping against one original image, video, or audio file. |
+| **Clean Audio Watermark (RAIW)** | Cleans ComfyUI `AUDIO` tensors (`{"waveform": [B, C, N], "sample_rate": sr}`) through the library's neural (`dac`, `snac`, `encodec`, `combined`) and spectral audio profiles with optional `--vendor` cohort selection. |
+| **Clean Video Frames (RAIW)** | Cleans ComfyUI video frame batches (`IMAGE` `[F, H, W, C]` + `fps` + optional `AUDIO`) for visible AI generator marks, optional invisible video profiles (`synthid`, `seedance`, `wan21-synthid`, `wan21-seedance`), and audio watermarks. |
 
 The image, audio, and video tensor nodes operate directly on ComfyUI tensors. The three
 provenance-aware nodes accept a file path because ComfyUI `IMAGE` tensors do not

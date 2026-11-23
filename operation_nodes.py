@@ -6,6 +6,16 @@ from typing import Any, ClassVar
 
 from remove_ai_watermarks.integration import operation_catalog, run_operation, widget_arguments
 
+try:
+    from remove_ai_watermarks._internal.constants import VIDEO_PROFILE_ALIASES as _VIDEO_ALIASES
+except Exception:  # noqa: BLE001
+    _VIDEO_ALIASES = {
+        "seedance": "seedance-experimental",
+        "wan21-synthid": "wan21-synthid-experimental",
+        "wan21-seedance": "wan21-seedance-experimental",
+    }
+_LEGACY_VIDEO_ALIASES = frozenset(_VIDEO_ALIASES.values())
+
 
 class CatalogOperation:
     operation: ClassVar[dict[str, Any]]
@@ -28,7 +38,11 @@ class CatalogOperation:
             default = schema.get("default")
             options = {"tooltip": schema.get("description", name)}
             if "enum" in schema:
-                kind = list(schema["enum"])
+                raw_enum = list(schema["enum"])
+                if name == "profile" and set(_VIDEO_ALIASES).issubset(raw_enum):
+                    kind = [item for item in raw_enum if item not in _LEGACY_VIDEO_ALIASES]
+                else:
+                    kind = raw_enum
                 options["default"] = default if default is not None else kind[0]
             elif schema["type"] == "boolean":
                 if default is None:

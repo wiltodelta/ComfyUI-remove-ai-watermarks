@@ -130,7 +130,24 @@ def _output_path(source: Path, value: str) -> Path:
 
 
 def _path_to_tensor(path: Path) -> Any:
-    """Read a file result back into one ComfyUI IMAGE tensor."""
+    """Read a file result back into a single-frame ComfyUI IMAGE preview tensor."""
+    suffix = path.suffix.lower()
+    if suffix in _audio_extensions():
+        import torch
+
+        return torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+    if suffix in _video_extensions():
+        from remove_ai_watermarks.video_decode import open_video_capture
+
+        cap = open_video_capture(path)
+        try:
+            ok, frame = cap.read()
+        finally:
+            cap.release()
+        if not ok or frame is None:
+            raise ValueError(f"Could not read output video frames: {path}")
+        return _bgr_list_to_tensor([frame])
+
     from remove_ai_watermarks import image_io
 
     bgr = image_io.imread(path)
@@ -463,21 +480,72 @@ class RAIWIdentifyProvenance:
         check_visible: bool = True,
         check_invisible: bool = True,
     ) -> tuple[str, str, str, str]:
-        from remove_ai_watermarks.identify import identify
+        from dataclasses import asdict, is_dataclass
 
-        report = identify(
-            _source_path(source_path),
-            check_visible=check_visible,
-            check_invisible=check_invisible,
-        )
-        verdict = {True: "AI-generated", False: "not AI", None: "unknown"}[
-            report.is_ai_generated
-        ]
+        source = _source_path(source_path)
+        suffix = source.suffix.lower()
+        verdict_labels = {True: "AI-generated", False: "not AI", None: "unknown"}
+
+        if suffix in _video_extensions():
+            from remove_ai_watermarks.video import identify_video
+
+            vid_report = identify_video(
+                source,
+                check_visible=check_visible,
+                check_audio=check_invisible,
+            )
+            payload = (
+                asdict(vid_report)
+                if is_dataclass(vid_report) and not isinstance(vid_report, type)
+                else dict(vars(vid_report))
+            )
+            is_ai, platform, confidence = (
+                vid_report.is_ai_generated,
+                vid_report.platform,
+                vid_report.confidence,
+            )
+        elif suffix in _audio_extensions():
+            from remove_ai_watermarks.audio import identify_audio
+            from remove_ai_watermarks.video import (
+                _platform_from_video_metadata,
+                _video_markers_claim_ai,
+            )
+
+            aud_report = identify_audio(
+                source,
+                check_invisible=check_invisible,
+                scheme="auto",
+            )
+            payload = (
+                asdict(aud_report)
+                if is_dataclass(aud_report) and not isinstance(aud_report, type)
+                else dict(vars(aud_report))
+            )
+            claims_ai = _video_markers_claim_ai(aud_report.metadata_markers)
+            has_signal = claims_ai or aud_report.watermark_status == "detected"
+            is_ai = True if has_signal else None
+            platform = _platform_from_video_metadata(aud_report.metadata_markers) if claims_ai else None
+            confidence = "high" if has_signal else "unknown"
+        else:
+            from remove_ai_watermarks.identify import identify
+
+            report = identify(
+                source,
+                check_visible=check_visible,
+                check_invisible=check_invisible,
+            )
+            payload = report.to_dict()
+            is_ai, platform, confidence = (
+                report.is_ai_generated,
+                report.platform,
+                report.confidence,
+            )
+
         return (
-            json.dumps(report.to_dict(), ensure_ascii=False, indent=2),
-            verdict,
-            report.platform or "",
-            report.confidence,
+            json.dumps(payload, default=str, ensure_ascii=False, indent=2),
+            verdict_labels[is_ai],
+            platform or "",
+            confidence,
         )
 
 
@@ -616,6 +684,46 @@ class RAIWRemoveAllWatermarks:
         # the two sibling nodes disagree on whether a not-yet-existing output
         # directory is the user's mistake or ours.
         output.parent.mkdir(parents=True, exist_ok=True)
+        suffix = source.suffix.lower()
+        if suffix in _video_extensions():
+            from remove_ai_watermarks.video import remove_video_all
+
+            vid_res = remove_video_all(
+                source,
+                output,
+                backend=backend,
+                include_invisible=True if force_invisible else "auto",
+                seed=seed,
+                include_audio_invisible=True,
+                audio_force=force_invisible,
+            )
+            vid_info = (
+                f"visible: {vid_res.visible_mark or 'none'}; "
+                f"invisible: {'removed' if vid_res.invisible_removed else 'skipped'}; "
+                f"metadata: {'stripped' if not vid_res.remaining_metadata else 'partial'}"
+            )
+            return (_path_to_tensor(Path(vid_res.output)), str(vid_res.output), vid_info)
+        if suffix in _audio_extensions():
+            from remove_ai_watermarks.audio import remove_audio_all
+
+            aud_res = remove_audio_all(
+                source,
+                output,
+                include_invisible=True,
+                force=force_invisible,
+                scheme="auto",
+            )
+            aud_method = (
+                aud_res.invisible_result.method
+                if aud_res.invisible_applied and aud_res.invisible_result is not None
+                else "skipped"
+            )
+            aud_info = (
+                f"invisible: {aud_method}; "
+                f"metadata: {'stripped' if not aud_res.remaining_metadata else 'partial'}"
+            )
+            return (_path_to_tensor(Path(aud_res.output)), str(aud_res.output), aud_info)
+
         progress: list[str] = []
         options = InvisibleOptions(
             strength=strength if strength > 0 else None,
@@ -648,25 +756,47 @@ class RAIWRemoveAllWatermarks:
         return (_path_to_tensor(result.output), str(result.output), info)
 
 
+_FALLBACK_VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".mov",
+    ".m4v",
+    ".mkv",
+    ".webm",
+    ".avi",
+    ".flv",
+)
+_FALLBACK_AUDIO_EXTENSIONS = (
+    ".wav",
+    ".flac",
+    ".mp3",
+    ".m4a",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".aac",
+    ".mka",
+)
 _FALLBACK_AUDIO_SCHEMES = (
     "auto",
     "audioseal",
     "wavmark",
     "perth",
     "silentcipher",
-    "silentcipher16",
     "all",
 )
 _FALLBACK_AUDIO_METHODS = (
     "auto",
-    "dac",
-    "snac",
     "spectral",
     "encodec",
     "combined",
-    "bigvgan",
-    "mimi",
-    "focalcodec",
+    "dac",
+    "snac",
+)
+_FALLBACK_AUDIO_DEVICES = (
+    "auto",
+    "cpu",
+    "mps",
+    "cuda",
 )
 _FALLBACK_AUDIO_VENDORS = (
     "auto",
@@ -703,10 +833,31 @@ _FALLBACK_VIDEO_MARKS = (
 _FALLBACK_VIDEO_PROFILES = (
     "auto",
     "synthid",
-    "seedance-experimental",
-    "wan21-synthid-experimental",
-    "wan21-seedance-experimental",
+    "seedance",
+    "wan21-synthid",
+    "wan21-seedance",
 )
+_FALLBACK_LEGACY_VIDEO_PROFILES = {
+    "seedance-experimental": "seedance",
+    "wan21-synthid-experimental": "wan21-synthid",
+    "wan21-seedance-experimental": "wan21-seedance",
+}
+
+
+def _video_extensions() -> frozenset[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import VIDEO_EXTENSIONS
+    except Exception:  # noqa: BLE001
+        return frozenset(_FALLBACK_VIDEO_EXTENSIONS)
+    return frozenset(VIDEO_EXTENSIONS)
+
+
+def _audio_extensions() -> frozenset[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import AUDIO_EXTENSIONS
+    except Exception:  # noqa: BLE001
+        return frozenset(_FALLBACK_AUDIO_EXTENSIONS)
+    return frozenset(AUDIO_EXTENSIONS)
 
 
 def _audio_scheme_choices() -> list[str]:
@@ -726,6 +877,14 @@ def _audio_method_choices() -> list[str]:
     return list(get_args(AudioMethod))
 
 
+def _audio_device_choices() -> list[str]:
+    try:
+        from remove_ai_watermarks._internal.constants import AUDIO_VOCODER_DEVICES
+    except Exception:  # noqa: BLE001
+        return list(_FALLBACK_AUDIO_DEVICES)
+    return list(AUDIO_VOCODER_DEVICES)
+
+
 def _audio_vendor_choices() -> list[str]:
     try:
         from remove_ai_watermarks._internal.constants import AUDIO_VENDORS
@@ -742,12 +901,30 @@ def _video_mark_choices() -> list[str]:
     return list(VIDEO_VISIBLE_MARKS)
 
 
+def _legacy_video_profile_map() -> dict[str, str]:
+    try:
+        from remove_ai_watermarks._internal.constants import VIDEO_PROFILE_ALIASES
+    except Exception:  # noqa: BLE001
+        return dict(_FALLBACK_LEGACY_VIDEO_PROFILES)
+    return {legacy: primary for primary, legacy in VIDEO_PROFILE_ALIASES.items()}
+
+
 def _video_profile_choices() -> list[str]:
     try:
-        from remove_ai_watermarks.video import VIDEO_INVISIBLE_PROFILES
+        from remove_ai_watermarks._internal.constants import (
+            VIDEO_INVISIBLE_PROFILES,
+            VIDEO_PROFILE_ALIASES,
+        )
     except Exception:  # noqa: BLE001
         return list(_FALLBACK_VIDEO_PROFILES)
-    return ["auto", *(p for p in VIDEO_INVISIBLE_PROFILES if p != "auto")]
+    legacy_values = set(VIDEO_PROFILE_ALIASES.values())
+    primary = [p for p in VIDEO_INVISIBLE_PROFILES if p != "auto" and p not in legacy_values]
+    return ["auto", *primary]
+
+
+def _normalize_video_profile(profile: str) -> str:
+    """Map legacy ``*-experimental`` profile names to clean primary names."""
+    return _legacy_video_profile_map().get(profile, profile)
 
 
 def _write_tensor_wav(waveform_cn: Any, sample_rate: int, dest: Path) -> None:
@@ -800,7 +977,7 @@ class RAIWCleanAudio:
                 "vendor": (_audio_vendor_choices(), {"default": "auto"}),
                 "allow_unverified": ("BOOLEAN", {"default": False}),
                 "force": ("BOOLEAN", {"default": False}),
-                "vocoder_device": (["cpu", "mps", "cuda"], {"default": "cpu"}),
+                "vocoder_device": (_audio_device_choices(), {"default": "cpu"}),
             },
         }
 
@@ -903,6 +1080,13 @@ class RAIWCleanVideo:
     FUNCTION = "clean"
     CATEGORY = CATEGORY
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, profile: str = "auto") -> bool | str:
+        allowed = set(_video_profile_choices()) | set(_legacy_video_profile_map())
+        if profile not in allowed:
+            return f"Invalid video profile: {profile}"
+        return True
+
     def clean(
         self,
         images: Any,
@@ -983,12 +1167,13 @@ class RAIWCleanVideo:
                 if proc.stderr is not None:
                     proc.stderr.close()
 
+            normalized_profile = _normalize_video_profile(profile)
             video_kwargs: dict[str, Any] = {
                 "mark": mark,
                 "backend": backend,
                 "temporal_consistency": temporal_consistency,
                 "include_invisible": invisible,
-                "profile": profile,
+                "invisible_profile": normalized_profile,
                 "seed": seed,
                 "device": device,
             }
