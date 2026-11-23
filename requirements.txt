@@ -1,1 +1,1 @@
-remove-ai-watermarks[all,text-draft]>=0.72.0
+remove-ai-watermarks[all,text-draft]>=0.73.0
